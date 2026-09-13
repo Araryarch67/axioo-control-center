@@ -61,10 +61,17 @@ echo "=== [4/4] build + AppImage ==="
 "$HERE/script.sh"
 IMG="$(ls -t "$HERE"/dist/Axioo-Control-Center-*-x86_64.AppImage | head -1)"
 
-echo "=== install AppImage ==="
-mkdir -p "$HOME/Applications" "$HOME/.local/share/applications" \
+echo "=== install AppImage + axioo-ctl ==="
+mkdir -p "$HOME/Applications" "$HOME/.local/bin" "$HOME/.local/share/applications" \
     "$HOME/.local/share/icons/hicolor/256x256/apps"
 cp "$IMG" "$HOME/Applications/"
+# Helper host agar fallback `pkexec axioo-ctl fan ...` dari GUI AppImage bisa
+# dieksekusi root (binary di dalam mount FUSE /tmp/.mount_* milik user tak
+# bisa diakses root → selalu "Permission denied").
+if [ -f "$HERE/target/release/axioo-ctl" ]; then
+    cp "$HERE/target/release/axioo-ctl" "$HOME/.local/bin/"
+    chmod +x "$HOME/.local/bin/axioo-ctl"
+fi
 cp "$HERE/packaging/appimage/$APPID.desktop" "$HOME/.local/share/applications/"
 sed -i "s|^Exec=.*|Exec=$HOME/Applications/$(basename "$IMG")|" \
     "$HOME/.local/share/applications/$APPID.desktop"

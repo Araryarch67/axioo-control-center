@@ -453,18 +453,70 @@ impl Persisted {
     }
 }
 
-/// Cari helper `axioo-ctl`: sibling di sebelah binary GUI, else PATH.
+/// Cari helper `axioo-ctl`: prefer binary di host yang BISA dieksekusi root
+/// via pkexec (`~/.local/bin`, `/usr/local/bin`, `/usr/bin`, PATH).
+/// Sibling di sebelah binary GUI dipakai TERAKHIR — dan DILEWATI bila di
+/// dalam mount AppImage (`/tmp/.mount_*`, `/proc/`), karena mount FUSE milik
+/// user tak bisa diakses root (pkexec → "Permission denied").
 /// Dipakai HANYA untuk fallback pkexec saat proses GUI bukan root.
 fn axioo_ctl_path() -> String {
+    for p in [
+        std::env::var("HOME").ok().map(|h| format!("{h}/.local/bin/axioo-ctl")),
+        Some("/usr/local/bin/axioo-ctl".to_string()),
+        Some("/usr/bin/axioo-ctl".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if std::path::Path::new(&p).is_file() {
+            return p;
+        }
+    }
+    if let Ok(path) = which_axioo_ctl() {
+        return path;
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let sib = dir.join("axioo-ctl");
-            if sib.exists() {
-                return sib.to_string_lossy().into_owned();
+            let s = dir.to_string_lossy();
+            let in_appimage_mount =
+                s.starts_with("/tmp/.mount_") || s.starts_with("/proc/");
+            if !in_appimage_mount {
+                let sib = dir.join("axioo-ctl");
+                if sib.exists() {
+                    return sib.to_string_lossy().into_owned();
+                }
             }
         }
     }
     "axioo-ctl".to_string()
+}
+
+/// Cari `axioo-ctl` di PATH tanpa crate tambahan.
+fn which_axioo_ctl() -> Result<String, ()> {
+    let path = std::env::var("PATH").map_err(|_| ())?;
+    for dir in path.split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let cand = format!("{dir}/axioo-ctl");
+        if std::path::Path::new(&cand).is_file() {
+            // Harus executable (minimal oleh somebody); pkexec yang menilai akhir.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(md) = std::fs::metadata(&cand) {
+                    if md.permissions().mode() & 0o111 != 0 {
+                        return Ok(cand);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                return Ok(cand);
+            }
+        }
+    }
+    Err(())
 }
 
 /// Fallback non-root: `pkexec axioo-ctl fan ...` (satu prompt; polkit
@@ -3021,6 +3073,21 @@ fn sample(s: &mut Sampler) -> SensorData {
     }
 }
 
+/// Target relaunch root: bila jalan dari AppImage, `current_exe()` menunjuk
+/// ke dalam mount FUSE (`/tmp/.mount_*/usr/bin/...`) yang TIDAK bisa diakses
+/// root (mount milik user) → pkexec selalu "Permission denied" (exit 126).
+/// Solusi: relaunch file AppImage-nya (`$APPIMAGE`) agar root me-mount ulang
+/// sendiri. Di luar AppImage, pakai `current_exe()` seperti biasa.
+fn relaunch_target() -> Option<std::path::PathBuf> {
+    if let Ok(ai) = std::env::var("APPIMAGE") {
+        let p = std::path::PathBuf::from(&ai);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    std::env::current_exe().ok()
+}
+
 /// App harus jalan sebagai root: kalau euid != 0, relaunch diri via
 /// pkexec (prompt sekali di awal), lalu proses ini menunggu sampai GUI
 /// root ditutup. Env Wayland diteruskan agar window bisa dibuka.
@@ -3030,9 +3097,9 @@ fn ensure_root_or_relaunch() {
     if fan_ctrl::is_root() || std::env::var("AXIOO_ALLOW_USER").is_ok() {
         return;
     }
-    let exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(_) => return,
+    let exe = match relaunch_target() {
+        Some(p) => p,
+        None => return,
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut cmd = std::process::Command::new("pkexec");
