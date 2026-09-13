@@ -38,7 +38,7 @@ cargo build -p axioo-lib -p axioo-ctl # build yang stabil
 |---|-------|--------|
 | 0 | `probe`, `monitor`, `kbd status/get/set`, docs, README+credits | ✅ selesai, terverifikasi di Pongo Studio X (2025) |
 | 1 | GUI live sensor (GPUI) | 🔄 COMPILE HIJAU + runtime stabil (2026-09-13: survive 6 dtk tanpa crash); redesign gaming-center DONE: sidebar nav (Dashboard/Performa/Kipas/Daya), mode strip Quiet/Balanced/Entertainment/Performance, gauge CPU canvas, chart kurva kipas canvas + editor titik, kartu GPU/Mem/Baterai/RAPL, pill status EC — butuh uji visual user + verify live update |
-| 2 | Backlight keyboard Studio X | ✅ quirk TERBUKTI (`packaging/clevo-drivers-axioo`, force 3-zone untuk tipe `0x17`): 3 node LED + tulis OK via CLI; panel GUI Keyboard DONE (status/brightness/preset/visualizer per-zona) |
+| 2 | Backlight keyboard Studio X | ✅ quirk TERBUKTI (`packaging/clevo-drivers-axioo`, force 3-zone untuk tipe `0x17` + node ke-4 numpad via EC-direct `0x0B` ala System76): 4 node LED + tulis OK via CLI; panel GUI Keyboard DONE (status/brightness/preset+zona/visualizer) |
 | 3 | Kontrol kipas (`axioo-ctl fan`) | ✅ peta TERVALIDASI idle di Studio X (2026-09-13: `0x07`=61C vs pkg 64C, RPM EC persis = hwmon 2422/2015, konsisten 5+ sampel); tooling read-only DONE (`fan dump` + `fan watch` + `fan curve` + tests); konfirmasi tracking saat load DIPARKIR atas permintaan user → langsung desain `axiood` saat dibutuhkan |
 | 4 | Daemon `axiood` + D-Bus + profil | ⬜ belum mulai |
 | 5 | Profil CPU/GPU (RAPL, cpufreq, NVIDIA) | ⬜ belum mulai |

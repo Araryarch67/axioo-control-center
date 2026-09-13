@@ -29,6 +29,9 @@ dkms remove tuxedo-drivers-axioo/4.20.1 --all || true
 rm -rf "$DST"
 cp -r "$SRC" "$DST"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-kbd-quirk.patch"
+patch "$DST/clevo_leds.h" < "$HERE/studiox-4th-zone.patch"
+patch "$DST/clevo_leds.h" < "$HERE/studiox-getspecs-debug.patch"
+patch "$DST/clevo_leds.h" < "$HERE/studiox-numpad-ec.patch"
 cp "$HERE/dkms.conf" "$DST/dkms.conf"
 echo "patched: $DST/clevo_leds.h"
 

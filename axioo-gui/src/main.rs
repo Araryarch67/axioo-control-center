@@ -1629,10 +1629,11 @@ impl RootView {
         cx.notify();
     }
 
-    /// Teks target zona: "semua" / "Z1"..  Zona 1=kiri (urutan discover).
+    /// Teks target zona: "semua" / Z1..Z3 / Numpad (urutan discover).
     fn kbd_target_txt(sel: Option<usize>) -> String {
         match sel {
             None => "semua".to_string(),
+            Some(3) => "Numpad".to_string(),
             Some(i) => format!("Z{}", i + 1),
         }
     }
@@ -1654,40 +1655,45 @@ impl RootView {
     }
 
     /// Visualizer keyboard: 5×15 key menyala ikut warna × brightness
-    /// per zona (sepertiga kolom = zona 0/1/2).
+    /// per zona (dibagi rata ke zona terdeteksi).
     fn kbd_visual_card(&self) -> Div {
         let max = self.kbd_max().max(1) as f32;
+        let nz = self.data.kbd_zones.len().clamp(1, 6);
         let mut rows: Vec<Div> = Vec::with_capacity(5);
         for _ in 0..5 {
-            let mut groups: Vec<Div> = Vec::with_capacity(3);
-            for z in 0..3 {
+            let mut groups: Vec<Vec<Div>> = (0..nz).map(|_| Vec::new()).collect();
+            for c in 0..15 {
+                let z = (c * nz / 15).min(nz - 1);
                 let (b, col) = self.data.kbd_zones.get(z).copied().unwrap_or((0, (0, 0, 0)));
                 let g = glow(col, b as f32 / max);
                 let bc = if g == 0 { BORDER } else { g };
-                let mut keys: Vec<Div> = Vec::with_capacity(5);
-                for _ in 0..5 {
-                    keys.push(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .h(px(24.))
-                            .rounded_sm()
-                            .bg(rgb(PANEL2))
-                            .border_1()
-                            .border_color(rgb(bc)),
-                    );
-                }
-                groups.push(
+                groups[z].push(
                     div()
-                        .flex()
-                        .flex_row()
-                        .gap(px(3.))
                         .flex_1()
                         .min_w(px(0.))
-                        .children(keys),
+                        .h(px(24.))
+                        .rounded_sm()
+                        .bg(rgb(PANEL2))
+                        .border_1()
+                        .border_color(rgb(bc)),
                 );
             }
-            rows.push(div().flex().flex_row().gap_2().w_full().children(groups));
+            rows.push(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .w_full()
+                    .children(groups.into_iter().map(|keys| {
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(3.))
+                            .flex_1()
+                            .min_w(px(0.))
+                            .children(keys)
+                    })),
+            );
         }
         let zone_txt = if self.data.kbd_zones.is_empty() {
             "LED tak ada".to_string()
@@ -1895,6 +1901,10 @@ impl RootView {
                     }))
                     .child(seg_opt("kbz-2", "Kanan", self.kbd_zone_sel == Some(2), cx, |v, _, _, cx| {
                         v.kbd_zone_sel = Some(2);
+                        cx.notify();
+                    }))
+                    .child(seg_opt("kbz-3", "Numpad", self.kbd_zone_sel == Some(3), cx, |v, _, _, cx| {
+                        v.kbd_zone_sel = Some(3);
                         cx.notify();
                     })),
                 div().flex().flex_row().flex_wrap().gap_2().w_full().children(tiles),

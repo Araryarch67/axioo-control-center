@@ -45,6 +45,13 @@ brightness      -> /sys/.../rgb:kbd_backlight/brightness
    `tuxedo-drivers-axioo/4.20.1`, reload modul). Quirk hanya aktif untuk
    board `Pongo Studio X` dan hanya untuk tipe yang tidak dikenal —
    tipe yang sudah dikenal tidak disentuh.
+3. **Zona ke-4 (numpad) tidak bisa via WMI `0x67`** (hanya indeks EC
+   3/4/5/7/9; indeks 7 = lightbar, tak terlihat di mesin ini).
+   Terbukti dari DSDT + driver System76: numpad = indeks EC **`0x0B`**,
+   dikirim langsung via `ECMD` (`05 00 CA 0B RR GG BB`).
+   `studiox-numpad-ec.patch` mendaftarkan node ke-4 yang menulis lewat
+   jalur itu (alat System76 dipakai sebagai referensi yang sudah
+   terbukti di produksi).
 3. **Tulis butuh root** (`sudo axioo-ctl kbd set ...`) sampai daemon
    `axiood` ada. Selalu coba `--dry-run` dulu.
 4. Skala brightness JANGAN diasumsikan 0–255 — baca `max_brightness`

@@ -1,0 +1,76 @@
+--- /tmp/n4base.h	2026-09-13 19:19:45.400852154 +0700
++++ /tmp/n4.h	2026-09-13 19:19:16.788780750 +0700
+@@ -53,6 +53,7 @@
+ #include <linux/led-class-multicolor.h>
+ #include <linux/delay.h>
+ #include <linux/dmi.h>
++#include <linux/acpi.h>
+ 
+ #define CLEVO_KBD_BRIGHTNESS_MAX			0xff
+ #define CLEVO_KBD_BRIGHTNESS_DEFAULT			0x00
+@@ -164,6 +165,53 @@
+ // -> update all clevo_mcled_cdevs brightness levels to refect that the firmware method sets the
+ //    the whole keyboard brightness and not just one zone
+ // This is a temporary fix until KDE handles multiple keyboard backlights correctly
++// Pongo Studio X: numpad lives at EC RGB index 0x0B, unreachable via WMI
++// 0x67 (which only drives 3/4/5/7/9). Send it straight through EC ECMD,
++// like System76's clevo-acpi does (firmware-mediated, same safety class).
++static acpi_status studiox_ec_locate(acpi_handle handle, u32 level,
++		     void *context, void **retval)
++{
++	*(acpi_handle *)retval = handle;
++	return AE_CTRL_TERMINATE;
++}
++
++static int studiox_ec_kbd_color(u8 index, u32 color)
++{
++	u8 buf[8] = {};
++	struct acpi_buffer out = { ACPI_ALLOCATE_BUFFER, NULL };
++	struct acpi_object_list in;
++	union acpi_object obj;
++	union acpi_object *ret_obj;
++	acpi_handle handle;
++	acpi_status status;
++
++	status = acpi_get_devices("PNP0C09", studiox_ec_locate, NULL, &handle);
++	if (ACPI_FAILURE(status) || !handle) {
++		pr_debug("studiox: failed to get EC handle\n");
++		return -ENODEV;
++	}
++	buf[0] = 5;
++	buf[2] = 0xCA;
++	buf[3] = index;
++	buf[4] = color & 0xFF;
++	buf[5] = (color >> 16) & 0xFF;
++	buf[6] = (color >> 8) & 0xFF;
++	obj.type = ACPI_TYPE_BUFFER;
++	obj.buffer.length = sizeof(buf);
++	obj.buffer.pointer = buf;
++	in.count = 1;
++	in.pointer = &obj;
++	status = acpi_evaluate_object(handle, "ECMD", &in, &out);
++	if (ACPI_FAILURE(status)) {
++		pr_debug("studiox: ECMD failed\n");
++		return -EIO;
++	}
++	ret_obj = out.pointer;
++	if (ret_obj)
++		ACPI_FREE(out.pointer);
++	return 0;
++}
++
+ static struct led_classdev_mc clevo_mcled_cdevs[4]; // forward declaration
+ static void clevo_leds_set_brightness_mc(struct led_classdev *led_cdev, enum led_brightness brightness) {
+ 	int ret;
+@@ -193,7 +241,10 @@
+ 		(green << 8) +
+ 		blue;
+ 
+-	ret = clevo_evaluate_set_rgb_color(zone, color);
++	if (zone == STUDIOX_KBD_ZONE_4)
++		ret = studiox_ec_kbd_color(0x0B, color);
++	else
++		ret = clevo_evaluate_set_rgb_color(zone, color);
+ 	if (ret) {
+ 		pr_debug("clevo_leds_set_brightness_mc(): clevo_evaluate_set_rgb_color() failed\n");
+ 	}
