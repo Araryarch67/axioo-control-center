@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Setup end-to-end di mesin fresh (Arch, Pongo Studio X 2025):
+#   1. base driver (clevo-drivers-dkms-git dari AUR)
+#   2. patch quirk Studio X 0x17 (+ zona-4 numpad) + install DKMS
+#   3. build release + AppImage
+#   4. install AppImage ke ~/Applications + entri desktop
+#
+# Jalankan TANPA sudo (sudo diminta di langkah yang perlu):
+#   ./setup.sh
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+APPID="axioo-control-center"
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "butuh '$1' — install dulu"; exit 1; }; }
+need curl
+need python3
+need gcc
+need make
+command -v cargo >/dev/null 2>&1 || { echo "butuh rust (rustup.rs) — install dulu"; exit 1; }
+
+echo "=== [0/4] cek AUR helper (buat driver clevo) ==="
+if ls -d /usr/src/clevo-drivers-* >/dev/null 2>&1; then
+    AUR_METHOD="skip (source driver sudah ada)"
+elif command -v yay >/dev/null 2>&1; then
+    AUR_METHOD="yay"
+elif command -v paru >/dev/null 2>&1; then
+    AUR_METHOD="paru"
+elif command -v git >/dev/null 2>&1; then
+    AUR_METHOD="manual (git clone + makepkg)"
+else
+    echo "tidak ada yay/paru/git — install salah satu dulu:"
+    echo "  sudo pacman -S --needed git base-devel      (lalu setup.sh pakai makepkg manual)"
+    echo "  atau install yay/paru dari AUR"
+    exit 1
+fi
+echo "AUR: $AUR_METHOD"
+
+echo "=== [1/4] kernel headers ==="
+if [ ! -d "/lib/modules/$(uname -r)/build" ]; then
+    echo "install linux-headers…"
+    sudo pacman -S --needed --noconfirm linux-headers
+fi
+
+echo "=== [2/4] base driver clevo-drivers-dkms-git ($AUR_METHOD) ==="
+case "$AUR_METHOD" in
+    skip*) echo "source driver sudah ada, lewati." ;;
+    yay) yay -S --needed --noconfirm clevo-drivers-dkms-git ;;
+    paru) paru -S --needed --noconfirm clevo-drivers-dkms-git ;;
+    manual*)
+        echo "tanpa yay/paru — clone + makepkg manual…"
+        rm -rf /tmp/clevo-drivers-aur && git clone https://aur.archlinux.org/clevo-drivers-dkms-git.git /tmp/clevo-drivers-aur
+        (cd /tmp/clevo-drivers-aur && makepkg -si --noconfirm)
+        ;;
+esac
+
+echo "=== [3/4] quirk Studio X + DKMS install (sudo) ==="
+sudo "$HERE/packaging/clevo-drivers-axioo/install.sh"
+
+echo "=== [4/4] build + AppImage ==="
+"$HERE/script.sh"
+IMG="$(ls -t "$HERE"/dist/Axioo-Control-Center-*-x86_64.AppImage | head -1)"
+
+echo "=== install AppImage ==="
+mkdir -p "$HOME/Applications" "$HOME/.local/share/applications" \
+    "$HOME/.local/share/icons/hicolor/256x256/apps"
+cp "$IMG" "$HOME/Applications/"
+cp "$HERE/packaging/appimage/$APPID.desktop" "$HOME/.local/share/applications/"
+sed -i "s|^Exec=.*|Exec=$HOME/Applications/$(basename "$IMG")|" \
+    "$HOME/.local/share/applications/$APPID.desktop"
+cp "$HERE/dist/icon.png" "$HOME/.local/share/icons/hicolor/256x256/apps/$APPID.png"
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+
+echo
+echo "OK semua:"
+echo "  driver : ls /sys/class/leds/ | grep kbd   (mesti ada rgb:kbd_backlight*)"
+echo "  app    : $HOME/Applications/$(basename "$IMG")"
+echo "  menu   : cari 'Axioo Control Center' di launcher"

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Axioo Control Center
+Comment=Hardware control for Axioo (Clevo) laptops: fan, keyboard, power
+Exec=axioo-control-center
+Icon=axioo-control-center
+Type=Application
+Categories=System;Settings;HardwareSettings;
+Terminal=false
+StartupWMClass=axioo-control-center

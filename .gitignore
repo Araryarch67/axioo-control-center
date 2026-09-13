@@ -1,2 +1,7 @@
 target/
 Cargo.lock
+dist/
+.tools/
+*.AppImage
+*.rej
+*.orig
