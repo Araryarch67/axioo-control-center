@@ -1,15 +1,16 @@
-//! `axioo-ctl fan`: read-only EC fan inspection + curve preview.
+//! `axioo-ctl fan`: EC fan inspection + privileged one-shot control.
 //!
-//! Safety: this module NEVER writes to the EC. `dump` only reads the
-//! `ec_sys` map; `curve` only evaluates the pure `auto_duty_step`
-//! function. Actual duty writes belong to the future `axiood` daemon,
-//! after the map is validated on the target model
-//! (`docs/ec-fan-protocol.md` section F).
+//! Safety: `dump`/`watch`/`curve` never touch the EC. `set`/`auto` write
+//! one-shot duty commands via `axioo_lib::fan_ctrl` and REFUSE unless
+//! running as root — the desktop GUI invokes them through pkexec
+//! (`pkexec axioo-ctl fan set 70`). Duty clamped 40–100%, both fans
+//! written, read-back verified via the 0xCE mirror when `ec_sys` exists.
+//! The continuous curve loop belongs to the future `axiood`, not here.
 
 use std::thread;
 use std::time::{Duration, Instant};
 
-use axioo_lib::{cpu, ec, fan, hwmon};
+use axioo_lib::{cpu, ec, fan, fan_ctrl, hwmon};
 
 /// `axioo-ctl fan dump`: decode fan registers + cross-check hwmon.
 pub fn dump() {
@@ -172,4 +173,60 @@ pub fn curve(temp_c: i32, duty: u8) {
         println!("  (di dalam hysteresis band — duty ditahan)");
     }
     println!("  clamp aman: {}–{}% (di bawah ~40% kipas stall)", fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT);
+}
+
+/// `axioo-ctl fan set`: one-shot manual duty on both fans (needs root).
+/// Fails cleanly with usage hint when not root (GUI uses pkexec).
+pub fn set(pct: u8) {
+    if !fan_ctrl::is_root() {
+        println!("error: fan set needs root.");
+        println!("  pakai: pkexec axioo-ctl fan set {pct}   (atau sudo)");
+        std::process::exit(1);
+    }
+    let want = pct.clamp(fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT);
+    if want != pct {
+        println!("  (duty {pct}% di-clamp ke {want}% — batas aman 40–100%)");
+    }
+    match fan_ctrl::set_manual_duty(want) {
+        Ok(rep) => {
+            println!("axioo-ctl fan set: manual {want}% kedua kipas (cmd 0x99 → 0x01+0x02)");
+            match rep.verified_pct {
+                Some(got) => println!("  verify OK: cermin 0xCE = {got}%"),
+                None => println!("  verify dilewati: ec_sys tak terbaca (tulis tetap jalan)"),
+            }
+            println!("  kembalikan kontrol EC: axioo-ctl fan auto");
+        }
+        Err(e) => {
+            println!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `axioo-ctl fan auto`: restore EC auto control on both fans (needs root).
+pub fn auto() {
+    if !fan_ctrl::is_root() {
+        println!("error: fan auto needs root.");
+        println!("  pakai: pkexec axioo-ctl fan auto   (atau sudo)");
+        std::process::exit(1);
+    }
+    match fan_ctrl::set_auto() {
+        Ok(()) => println!("axioo-ctl fan auto: kontrol dikembalikan ke EC (0x99, port 0xFF)"),
+        Err(e) => {
+            println!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// `axioo-ctl fan ping`: no-op root probe for GUI pre-auth at startup.
+/// Prints `ok` and exits 0 only when running as root (via pkexec/sudo);
+/// otherwise exits 1. Never touches the EC.
+pub fn ping() {
+    if !fan_ctrl::is_root() {
+        println!("error: fan ping needs root.");
+        println!("  pakai: pkexec axioo-ctl fan ping   (atau sudo)");
+        std::process::exit(1);
+    }
+    println!("ok");
 }

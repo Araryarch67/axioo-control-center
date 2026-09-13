@@ -1,18 +1,22 @@
-//! axioo-lib: read-only hardware introspection for Axioo laptops.
+//! axioo-lib: hardware introspection for Axioo laptops (+ one gated
+//! privileged fan writer).
 //!
-//! MVP rule: this crate NEVER writes to hardware. Every function only reads
-//! sysfs / procfs or spawns read-only helpers (e.g. `nvidia-smi -q` style
-//! queries). EC writes, WMI method calls and sysfs stores belong to a future
-//! `axioo-lib::control` module gated behind explicit review.
+//! Rule: everything is read-only sysfs/procfs EXCEPT
+//! [`fan_ctrl`], which performs one-shot EC duty writes and refuses
+//! unless running as root (desktop calls it via `pkexec axioo-ctl`).
+//! The continuous fan-curve loop still belongs to the future `axiood`
+//! daemon and must never live in CLI/GUI code.
 
 pub mod battery;
 pub mod cpu;
 pub mod dmi;
 pub mod ec;
 pub mod fan;
+pub mod fan_ctrl;
 pub mod hwmon;
 pub mod kbd;
 pub mod leds;
+pub mod memory;
 pub mod nvidia;
 pub mod platform;
 pub mod rapl;

@@ -5,3 +5,4 @@ edition = "2021"
 description = "Read-only hardware introspection library for Axioo Pongo / Clevo laptops on Linux"
 
 [dependencies]
+libc = "0.2"

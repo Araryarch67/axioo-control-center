@@ -7,24 +7,28 @@ Pengganti Clevo Control Center Windows. Workspace Cargo: `axioo-lib`,
 ## Perintah
 
 ```sh
-cargo build -p axioo-lib -p axioo-ctl   # build yang stabil
-cargo test -p axioo-lib                 # unit test (protokol EC, kbd)
+cargo check --workspace               # ✅ hijau (termasuk axioo-gui)
+cargo test -p axioo-lib               # unit test (protokol EC, kbd, kurva)
+cargo build -p axioo-lib -p axioo-ctl # build yang stabil
 ./target/debug/axioo-ctl probe          # dump kapabilitas hardware
 ./target/debug/axioo-ctl monitor        # dashboard live
+./target/debug/axioo-ctl fan dump       # butuh sudo + modprobe ec_sys
 ./target/debug/axioo-ctl kbd status     # status backlight keyboard
-cargo check -p axioo-gui                # ⚠️ GAGAL saat ini (lihat #1)
+./target/debug/axioo-control-center     # GUI (butuh display wayland/X)
 ```
 
-> Jangan `cargo build` workspace-wide sebelum #1 beres — `axioo-gui`
-> gagal compile (lihat bawah). Jangan commit tanpa diminta eksplisit.
+> Jangan commit tanpa diminta eksplisit.
 
 ## Aturan safety (wajib)
 
-- `axioo-lib` saat ini READ-ONLY kecuali `kbd::set` (sysfs LED, aman).
-- **Dilarang menulis ke EC** (`0x62/0x66`, `ec_sys` write, WMI method
-  call pemicu EC) sampai peta EC model target tervalidasi read-only
-  (`docs/ec-fan-protocol.md` bagian F). Tulis EC hanya milik daemon
-  root di masa depan (`axiood`), tidak pernah dari CLI/GUI langsung.
+- `axioo-lib` READ-ONLY kecuali `kbd::set` (sysfs LED, aman) dan
+  `fan_ctrl` (one-shot tulis EC: root-only, clamp 40–100%, kedua fan,
+  verify `0xCE` — disetujui 2026-09-13 setelah peta tervalidasi +
+  `fan set 100` terbukti via CLI).
+- **Loop kurva kontinu / tulis EC selain one-shot di atas hanya milik
+  daemon root di masa depan (`axiood`), tidak pernah dari CLI/GUI
+  langsung.** GUI menerapkan one-shot langsung via `fan_ctrl` (root);
+  otomatis fallback `pkexec` sekali saat proses GUI bukan root.
 - Quirk driver kernel dibatasi DMI board + tipe tak dikenal saja;
   jangan override tipe yang sudah dikenal driver.
 
@@ -33,8 +37,8 @@ cargo check -p axioo-gui                # ⚠️ GAGAL saat ini (lihat #1)
 | # | Fitur | Status |
 |---|-------|--------|
 | 0 | `probe`, `monitor`, `kbd status/get/set`, docs, README+credits | ✅ selesai, terverifikasi di Pongo Studio X (2025) |
-| 1 | GUI live sensor (GPUI) | ❌ BROKEN — `main.rs` pakai `AsyncApp`+`Entity` di `std::thread`, keduanya `!Send` |
-| 2 | Backlight keyboard Studio X | 🔄 pending validasi user: quirk DMI `0x17`→1-zone sudah didesain, menunggu hasil rebuild DKMS |
+| 1 | GUI live sensor (GPUI) | 🔄 COMPILE HIJAU + runtime stabil (2026-09-13: survive 6 dtk tanpa crash); redesign gaming-center DONE: sidebar nav (Dashboard/Performa/Kipas/Daya), mode strip Quiet/Balanced/Entertainment/Performance, gauge CPU canvas, chart kurva kipas canvas + editor titik, kartu GPU/Mem/Baterai/RAPL, pill status EC — butuh uji visual user + verify live update |
+| 2 | Backlight keyboard Studio X | 🔄 driver SUDAH loaded (`clevo_acpi/wmi`, `tuxedo_keyboard`) tapi node LED tetap absen → teori tipe `0x17` tak dikenal terkonfirmasi; langkah berikut patch quirk DKMS (lihat ide solusi) |
 | 3 | Kontrol kipas (`axioo-ctl fan`) | ✅ peta TERVALIDASI idle di Studio X (2026-09-13: `0x07`=61C vs pkg 64C, RPM EC persis = hwmon 2422/2015, konsisten 5+ sampel); tooling read-only DONE (`fan dump` + `fan watch` + `fan curve` + tests); konfirmasi tracking saat load DIPARKIR atas permintaan user → langsung desain `axiood` saat dibutuhkan |
 | 4 | Daemon `axiood` + D-Bus + profil | ⬜ belum mulai |
 | 5 | Profil CPU/GPU (RAPL, cpufreq, NVIDIA) | ⬜ belum mulai |

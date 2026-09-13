@@ -63,6 +63,15 @@ enum FanCmd {
         #[arg(long)]
         duty: u8,
     },
+    /// One-shot manual duty on both fans (needs root — via pkexec/sudo).
+    Set {
+        /// Duty in percent (clamped to safe 40–100%).
+        pct: u8,
+    },
+    /// Restore EC auto control on both fans (needs root — via pkexec/sudo).
+    Auto,
+    /// No-op root probe for GUI pre-auth at startup (never touches EC).
+    Ping,
 }
 
 #[derive(Subcommand)]
@@ -97,6 +106,9 @@ fn main() {
             FanCmd::Dump => fan::dump(),
             FanCmd::Watch { interval, count } => fan::watch(interval, count),
             FanCmd::Curve { temp, duty } => fan::curve(temp, duty),
+            FanCmd::Set { pct } => fan::set(pct),
+            FanCmd::Auto => fan::auto(),
+            FanCmd::Ping => fan::ping(),
         },
         Cmd::Kbd { cmd } => match cmd {
             KbdCmd::Status => kbd::status(),

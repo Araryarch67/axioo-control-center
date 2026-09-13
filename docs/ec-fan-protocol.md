@@ -13,8 +13,12 @@ Terverifikasi di: P7xxDM, N1xxED, NH5x_7x, ND/NE, **Axioo Pongo 725**.
 > EC generasi baru ini ternyata memakai peta yang sama.
 > Tinggal konfirmasi satu sampel saat load (RPM ikut naik) —
 > lihat `fan watch` di bawah.
-> Aturan safety tetap: tulis EC hanya dari `axiood` di masa depan,
-> tidak pernah dari CLI/GUI langsung.
+> Aturan safety (2026-09-13, direvisi): tulis EC satu-kali (one-shot)
+> via `axio_lib::fan_ctrl` **diperbolehkan** — peta tervalidasi read-only
+> idle (5+ sampel COCOK) dan `fan set 100` terkonfirmasi bekerja via CLI.
+> Syarat: root (pkexec/sudo), clamp 40–100%, tulis kedua fan, verify
+> via cermin `0xCE`. Loop kurva kontinu tetap HANYA milik `axiood`
+> di masa depan, tidak pernah dari CLI/GUI langsung.
 
 ## A. Akses I/O
 

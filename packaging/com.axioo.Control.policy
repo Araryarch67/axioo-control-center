@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Axioo Control Center</vendor>
+  <vendor_url>https://github.com/anomalyco/opencode</vendor_url>
+
+  <!-- One-shot EC fan control. Continuous curve loop belongs to axiood. -->
+  <action id="com.axioo.Control.fan">
+    <description>Atur kipas laptop Axioo</description>
+    <message>Otentikasi diperlukan untuk mengatur kipas (tulis EC satu-kali, batas aman 40–100%).</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/axioo-ctl</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">fan</annotate>
+  </action>
+</policyconfig>
