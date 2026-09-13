@@ -2,6 +2,7 @@
 name = "axioo-ctl"
 version = "0.1.0"
 edition = "2021"
+license = "AGPL-3.0-or-later"
 description = "Linux control utility for Axioo Pongo / Clevo laptops (read-only MVP: probe + monitor)"
 
 [[bin]]

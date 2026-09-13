@@ -117,6 +117,16 @@ impl Tab {
     fn all() -> [Tab; 5] {
         [Tab::Dashboard, Tab::Performa, Tab::Kipas, Tab::Keyboard, Tab::Daya]
     }
+
+    fn from_label(s: &str) -> Self {
+        match s {
+            "Performa" => Tab::Performa,
+            "Kipas" => Tab::Kipas,
+            "Keyboard" => Tab::Keyboard,
+            "Daya" => Tab::Daya,
+            _ => Tab::Dashboard,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -203,21 +213,51 @@ impl RootView {
         cpu_model: String,
         apply_tx: std::sync::mpsc::Sender<String>,
     ) -> Self {
+        // Pulihkan sesi sebelumnya (validasi + clamp, rusak → default).
+        let saved = Persisted::load();
+        let mode = saved
+            .mode
+            .filter(|m| {
+                [MODE_QUIET, MODE_BALANCED, MODE_ENT, MODE_PERF, MODE_CUSTOM].contains(&m.as_str())
+            })
+            .unwrap_or_else(|| MODE_BALANCED.to_string());
+        let mut curve: Vec<(i32, u8)> = saved
+            .curve
+            .map(|pts| {
+                pts.into_iter()
+                    .map(|(t, d)| {
+                        (
+                            t.clamp(20, 100),
+                            d.clamp(fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT),
+                        )
+                    })
+                    .collect()
+            })
+            .filter(|pts: &Vec<(i32, u8)>| !pts.is_empty())
+            .unwrap_or_else(|| mode_curve(&mode));
+        curve.sort_by_key(|&(t, _)| t);
+        curve.dedup_by_key(|&mut (t, _)| t);
+        if curve.is_empty() {
+            curve = mode_curve(&mode);
+        }
         Self {
             product,
             cpu_model,
             data: SensorData::default(),
-            mode: MODE_BALANCED.to_string(),
-            curve: mode_curve(MODE_BALANCED),
-            fan_manual: false,
-            manual_duty: 70,
-            mode_auto: true,
+            mode: mode.clone(),
+            curve,
+            fan_manual: saved.fan_manual.unwrap_or(false),
+            manual_duty: saved
+                .manual_duty
+                .map(|d| d.clamp(fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT))
+                .unwrap_or(70),
+            mode_auto: saved.mode_auto.unwrap_or(true),
             drag_point: None,
-            kbd_zone_sel: None,
+            kbd_zone_sel: saved.kbd_zone_sel.filter(|&i| i < 8),
             show_rgb_popup: false,
-            custom_rgb: (255, 255, 255),
+            custom_rgb: saved.custom_rgb.unwrap_or((255, 255, 255)),
             drag_rgb: None,
-            tab: Tab::Dashboard,
+            tab: saved.tab.map(|t| Tab::from_label(&t)).unwrap_or(Tab::Dashboard),
             notice: if fan_ctrl::is_root() {
                 None
             } else {
@@ -291,6 +331,30 @@ impl RootView {
         ((m.end_y - m.start_y) - m.view_h).clamp(0.0, 4000.0)
     }
 
+    /// Simpan state ke ~/.config (best-effort, silent).
+    fn persist(&self) {
+        let p = Persisted {
+            mode: Some(self.mode.clone()),
+            curve: Some(self.curve.clone()),
+            fan_manual: Some(self.fan_manual),
+            manual_duty: Some(self.manual_duty),
+            mode_auto: Some(self.mode_auto),
+            kbd_zone_sel: self.kbd_zone_sel,
+            custom_rgb: Some(self.custom_rgb),
+            tab: Some(self.tab.label().to_string()),
+        };
+        let path = match state_path() {
+            Some(p) => p,
+            None => return,
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&p) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+
     /// Tulis EC satu-kali di thread latar: langsung via `fan_ctrl`;
     /// kalau proses bukan root (`NotRoot`), otomatis fallback pkexec.
     /// Hasil ke toast + notice pendek.
@@ -343,6 +407,50 @@ struct Toast {
     text: String,
     at: Instant,
     error: bool,
+}
+
+/// State yang disimpan antar sesi (`~/.config/axioo-control-center/state.json`).
+/// Semua opsional: file hilang/rusak → default.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct Persisted {
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    curve: Option<Vec<(i32, u8)>>,
+    #[serde(default)]
+    fan_manual: Option<bool>,
+    #[serde(default)]
+    manual_duty: Option<u8>,
+    #[serde(default)]
+    mode_auto: Option<bool>,
+    /// None = semua zona.
+    #[serde(default)]
+    kbd_zone_sel: Option<usize>,
+    #[serde(default)]
+    custom_rgb: Option<(u8, u8, u8)>,
+    #[serde(default)]
+    tab: Option<String>,
+}
+
+fn state_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .ok()
+        .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")))?;
+    Some(base.join("axioo-control-center").join("state.json"))
+}
+
+impl Persisted {
+    fn load() -> Self {
+        let path = match state_path() {
+            Some(p) => p,
+            None => return Self::default(),
+        };
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
 }
 
 /// Cari helper `axioo-ctl`: sibling di sebelah binary GUI, else PATH.
@@ -3013,8 +3121,12 @@ fn main() {
         .unwrap();
 
         app.spawn(async move |cx: &mut AsyncApp| {
+            let mut ticks: u64 = 0;
             loop {
                 Timer::after(Duration::from_millis(250)).await;
+                ticks += 1;
+                // Autosave tiap ~5 detik (tanpa notify — tak ada perubahan visual).
+                let do_save = ticks % 20 == 0;
                 let mut latest: Option<SensorData> = None;
                 loop {
                     match rx.try_recv() {
@@ -3031,13 +3143,15 @@ fn main() {
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                     }
                 }
-                if latest.is_none() && apply_msgs.is_empty() {
+                if latest.is_none() && apply_msgs.is_empty() && !do_save {
                     continue;
                 }
                 if view
                     .update(cx, |v, cx| {
+                        let mut changed = false;
                         if let Some(data) = latest {
                             v.data = data;
+                            changed = true;
                         }
                         if !apply_msgs.is_empty() {
                             v.apply_busy = false;
@@ -3046,14 +3160,21 @@ fn main() {
                                 v.toast = Some(Toast { text: m, at: Instant::now(), error });
                             }
                             v.notice = Some("siap.".to_string());
+                            changed = true;
                         }
                         // Toast auto-hilang setelah 5 detik.
                         if let Some(t) = &v.toast {
                             if t.at.elapsed() > Duration::from_secs(5) {
                                 v.toast = None;
+                                changed = true;
                             }
                         }
-                        cx.notify();
+                        if do_save {
+                            v.persist();
+                        }
+                        if changed {
+                            cx.notify();
+                        }
                     })
                     .is_err()
                 {
@@ -3093,8 +3214,26 @@ mod tests {
     }
 
     #[test]
-    fn rgb_slider_roundtrip() {
-        let (ch, v) = rgb_xy_to_val(60.0, 20.0, 300.0, 108.0);
+    fn persisted_roundtrip() {
+        let p = Persisted {
+            mode: Some("Quiet".to_string()),
+            curve: Some(vec![(30, 40), (70, 80)]),
+            fan_manual: Some(true),
+            manual_duty: Some(55),
+            ..Default::default()
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        let q: Persisted = serde_json::from_str(&s).unwrap();
+        assert_eq!(q.mode.as_deref(), Some("Quiet"));
+        assert_eq!(q.curve, Some(vec![(30, 40), (70, 80)]));
+        assert_eq!(q.manual_duty, Some(55));
+        // File rusak → default, bukan panic.
+        let r: Persisted = serde_json::from_str("{oops").unwrap_or_default();
+        assert!(r.mode.is_none());
+    }
+
+    #[test]
+    fn rgb_slider_roundtrip() {        let (ch, v) = rgb_xy_to_val(60.0, 20.0, 300.0, 108.0);
         assert_eq!(ch, 0);
         let x = rgb_knob_x(v, 300.0);
         assert!((x - 60.0).abs() < 3.0);
