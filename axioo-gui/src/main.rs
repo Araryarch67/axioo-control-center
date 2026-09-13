@@ -166,10 +166,10 @@ struct RootView {
     mode_auto: bool,
     /// Index titik kurva yang sedang di-drag (None = tidak ada).
     drag_point: Option<usize>,
+    /// Zona keyboard target tulis (None = semua zona).
+    kbd_zone_sel: Option<usize>,
     tab: Tab,
     notice: Option<String>,
-    /// Tampilkan panel EC mentah (toggle "Lanjutan").
-    advanced: bool,
     /// True saat worker tulis EC berjalan.
     apply_busy: bool,
     apply_tx: std::sync::mpsc::Sender<String>,
@@ -193,13 +193,13 @@ impl RootView {
             manual_duty: 70,
             mode_auto: true,
             drag_point: None,
+            kbd_zone_sel: None,
             tab: Tab::Dashboard,
             notice: if fan_ctrl::is_root() {
                 None
             } else {
                 Some("bukan root: tulis EC via pkexec (satu prompt).".to_string())
             },
-            advanced: false,
             apply_busy: false,
             apply_tx,
             toast: None,
@@ -584,38 +584,6 @@ fn mode_card(
                 ),
         )
         .child(div().text_color(rgb(DIM)).text_xs().child(hint.to_string()))
-        .on_click(cx.listener(f))
-}
-
-/// Saklar ala "Advanced settings": pill + knob.
-fn toggle_switch(
-    id: &str,
-    on: bool,
-    cx: &mut Context<RootView>,
-    f: impl Fn(&mut RootView, &ClickEvent, &mut Window, &mut Context<RootView>) + 'static,
-) -> Stateful<Div> {
-    div()
-        .id(SharedString::from(id.to_string()))
-        .w(px(52.))
-        .h(px(26.))
-        .rounded_sm()
-        .px(px(3.))
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .bg(rgb(PANEL2))
-        .border_1()
-        .border_color(rgb(BORDER))
-        .cursor_pointer()
-        .child(div().flex_1())
-        .child(
-            div()
-                .w(px(20.))
-                .h(px(18.))
-                .rounded_sm()
-                .bg(rgb(if on { WHITE } else { FAINT })),
-        )
         .on_click(cx.listener(f))
 }
 
@@ -1619,17 +1587,22 @@ impl RootView {
         )
     }
 
-    /// Tulis backlight langsung (sysfs LED, aman; root) ke SEMUA zona.
-    /// Sinkron (±ms) + hasil ke toast.
+    /// Tulis backlight langsung (sysfs LED, aman; root) ke zona target
+    /// (`None` = semua zona). Sinkron (±ms) + hasil ke toast.
     fn kbd_apply(
         &mut self,
         cx: &mut Context<Self>,
         brightness: u32,
         rgb: (u8, u8, u8),
+        target: Option<usize>,
         label: String,
     ) {
         let devs = kbd::discover();
-        if devs.is_empty() {
+        let targets: Vec<&kbd::KbdBacklight> = match target {
+            None => devs.iter().collect(),
+            Some(i) => devs.get(i).into_iter().collect(),
+        };
+        if targets.is_empty() {
             self.toast = Some(Toast {
                 text: format!("{label}: gagal: LED keyboard tak ada (quirk DKMS?)"),
                 at: Instant::now(),
@@ -1639,21 +1612,37 @@ impl RootView {
             return;
         }
         let mut fails = 0;
-        for d in &devs {
+        for d in &targets {
             if kbd::set(d, brightness, rgb).is_err() {
                 fails += 1;
             }
         }
         self.toast = Some(Toast {
             text: if fails == 0 {
-                format!("{label}: OK ({} zona)", devs.len())
+                format!("{label}: OK ({} zona)", targets.len())
             } else {
-                format!("{label}: gagal di {fails}/{} zona", devs.len())
+                format!("{label}: gagal di {fails}/{} zona", targets.len())
             },
             at: Instant::now(),
             error: fails != 0,
         });
         cx.notify();
+    }
+
+    /// Teks target zona: "semua" / "Z1"..  Zona 1=kiri (urutan discover).
+    fn kbd_target_txt(sel: Option<usize>) -> String {
+        match sel {
+            None => "semua".to_string(),
+            Some(i) => format!("Z{}", i + 1),
+        }
+    }
+
+    /// State acuan zona target: (brightness, rgb); default zona 0.
+    fn kbd_zone_state(&self, tgt: Option<usize>) -> (u32, (u8, u8, u8)) {
+        tgt.and_then(|i| self.data.kbd_zones.get(i).copied()).unwrap_or((
+            self.data.kbd_brightness.unwrap_or(0),
+            self.data.kbd_rgb.unwrap_or((255, 255, 255)),
+        ))
     }
 
     fn kbd_max(&self) -> u32 {
@@ -1766,35 +1755,41 @@ impl RootView {
                     .gap_2()
                     .child(btn("kb-", "−", false, cx, move |v, _, _, cx| {
                         let max = v.kbd_max();
-                        let cur = v.data.kbd_brightness.unwrap_or(0);
-                        let rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        let tgt = v.kbd_zone_sel;
+                        let (cur, rgb) = v.kbd_zone_state(tgt);
                         let b = cur.saturating_sub((max / 10).max(1));
-                        v.kbd_apply(cx, b, rgb, format!("kbd brightness → {b}"));
+                        let t = Self::kbd_target_txt(tgt);
+                        v.kbd_apply(cx, b, rgb, tgt, format!("kbd {t} brightness → {b}"));
                         cx.notify();
                     }))
                     .child(btn("kb+", "+", false, cx, move |v, _, _, cx| {
                         let max = v.kbd_max();
-                        let cur = v.data.kbd_brightness.unwrap_or(0);
-                        let mut rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        let tgt = v.kbd_zone_sel;
+                        let (cur, mut rgb) = v.kbd_zone_state(tgt);
                         if rgb == (0, 0, 0) {
                             rgb = (255, 255, 255);
                         }
                         let b = cur.saturating_add((max / 10).max(1)).min(max);
-                        v.kbd_apply(cx, b, rgb, format!("kbd brightness → {b}"));
+                        let t = Self::kbd_target_txt(tgt);
+                        v.kbd_apply(cx, b, rgb, tgt, format!("kbd {t} brightness → {b}"));
                         cx.notify();
                     }))
                     .child(btn("kb-max", "Max", false, cx, move |v, _, _, cx| {
                         let max = v.kbd_max();
-                        let mut rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        let tgt = v.kbd_zone_sel;
+                        let (_, mut rgb) = v.kbd_zone_state(tgt);
                         if rgb == (0, 0, 0) {
                             rgb = (255, 255, 255);
                         }
-                        v.kbd_apply(cx, max, rgb, format!("kbd brightness → {max}"));
+                        let t = Self::kbd_target_txt(tgt);
+                        v.kbd_apply(cx, max, rgb, tgt, format!("kbd {t} brightness → {max}"));
                         cx.notify();
                     }))
                     .child(btn("kb-off", "Off", false, cx, move |v, _, _, cx| {
-                        let rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
-                        v.kbd_apply(cx, 0, rgb, "kbd off".to_string());
+                        let tgt = v.kbd_zone_sel;
+                        let (_, rgb) = v.kbd_zone_state(tgt);
+                        let t = Self::kbd_target_txt(tgt);
+                        v.kbd_apply(cx, 0, rgb, tgt, format!("kbd {t} off"));
                         cx.notify();
                     })),
             ],
@@ -1858,15 +1853,17 @@ impl RootView {
                     )
                     .on_click(cx.listener(move |v, _, _, cx| {
                         let max = v.kbd_max();
+                        let tgt = v.kbd_zone_sel;
+                        let (cur, _) = v.kbd_zone_state(tgt);
                         let b = if label == "off" {
                             0
+                        } else if cur == 0 {
+                            max
                         } else {
-                            match v.data.kbd_brightness {
-                                Some(0) | None => max,
-                                Some(b) => b,
-                            }
+                            cur
                         };
-                        v.kbd_apply(cx, b, col, format!("kbd {label}"));
+                        let t = Self::kbd_target_txt(tgt);
+                        v.kbd_apply(cx, b, col, tgt, format!("kbd {t} {label}"));
                         cx.notify();
                     })),
             );
@@ -1874,9 +1871,35 @@ impl RootView {
         card(
             "WARNA",
             [
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .w_full()
+                    .p_1()
+                    .rounded_md()
+                    .bg(rgb(BG))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .child(seg_opt("kbz-all", "Semua", self.kbd_zone_sel.is_none(), cx, |v, _, _, cx| {
+                        v.kbd_zone_sel = None;
+                        cx.notify();
+                    }))
+                    .child(seg_opt("kbz-0", "Kiri", self.kbd_zone_sel == Some(0), cx, |v, _, _, cx| {
+                        v.kbd_zone_sel = Some(0);
+                        cx.notify();
+                    }))
+                    .child(seg_opt("kbz-1", "Tengah", self.kbd_zone_sel == Some(1), cx, |v, _, _, cx| {
+                        v.kbd_zone_sel = Some(1);
+                        cx.notify();
+                    }))
+                    .child(seg_opt("kbz-2", "Kanan", self.kbd_zone_sel == Some(2), cx, |v, _, _, cx| {
+                        v.kbd_zone_sel = Some(2);
+                        cx.notify();
+                    })),
                 div().flex().flex_row().flex_wrap().gap_2().w_full().children(tiles),
                 div().text_color(rgb(FAINT)).text_xs().child(
-                    "klik warna = tulis ke semua zona (brightness 0 → otomatis full)".to_string(),
+                    "target zona di atas — berlaku untuk warna + brightness".to_string(),
                 ),
             ],
         )
@@ -1944,12 +1967,7 @@ impl Render for RootView {
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.gpu_card()))
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.mem_card()))
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.bat_card())),
-                )
-                .child(if self.advanced {
-                    div().w_full().child(self.ec_raw_card())
-                } else {
-                    div()
-                }),
+                ),
             Tab::Performa => div()
                 .flex()
                 .flex_col()
@@ -1987,12 +2005,7 @@ impl Render for RootView {
                         .flex_row()
                         .gap_2()
                         .w_full()
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.fan_state_card()))
-                        .child(if self.advanced {
-                            div().flex().flex_col().flex_1().min_w(px(0.)).child(self.ec_raw_card())
-                        } else {
-                            div().flex_1()
-                        }),
+                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.fan_state_card())),
                 ),
             Tab::Keyboard => div()
                 .flex()
@@ -2050,7 +2063,6 @@ impl Render for RootView {
         };
 
         let notice = self.notice.clone().unwrap_or_else(|| "siap.".to_string());
-        let manual = self.fan_manual;
 
         // ---- toast: mengambang kanan-bawah, tak menggeser layout ----
         let toast_el: AnyElement = match &self.toast {
@@ -2195,61 +2207,6 @@ impl Render for RootView {
                                     ),
                             )
                             .child(barcode())
-                            .child(
-                                // mini fan segmented mirror
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .w_full()
-                                    .child(div().text_color(rgb(DIM)).text_xs().child("Kipas".to_string()))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_row()
-                                            .gap_1()
-                                            .flex_1()
-                                            .p_1()
-                                            .rounded_md()
-                                            .bg(rgb(BG))
-                                            .border_1()
-                                            .border_color(rgb(BORDER))
-                                            .child(seg_opt("sb-auto", "Auto", !manual, cx, |v, _, _, cx| {
-                                                v.fan_manual = false;
-                                                v.spawn_fan_write(cx, FanWrite::Auto, "kipas → AUTO (EC)".to_string());
-                                                cx.notify();
-                                            }))
-                                            .child(seg_opt("sb-man", "Man", manual, cx, |v, _, _, cx| {
-                                                v.fan_manual = true;
-                                                v.mode_auto = false;
-                                                let d = v.manual_duty;
-                                                v.spawn_fan_write(cx, FanWrite::Manual(d), format!("kipas → MANUAL {d}%"));
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .justify_between()
-                                    .w_full()
-                                    .child(
-                                        div()
-                                            .text_color(rgb(DIM))
-                                            .text_xs()
-                                            .child("Lanjutan".to_string()),
-                                    )
-                                    .child({
-                                        let on = self.advanced;
-                                        toggle_switch("adv", on, cx, move |v, _, _, cx| {
-                                            v.advanced = !on;
-                                            cx.notify();
-                                        })
-                                    }),
-                            ),
                     ),
             )
             // ===== main column =====
