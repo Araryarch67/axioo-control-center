@@ -19,6 +19,7 @@ use axioo_lib::{
     fan::{self, FanSnapshot},
     fan_ctrl, hwmon, kbd, memory, nvidia, rapl,
 };
+use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Application, AsyncApp, Bounds, ClickEvent, Context, Div,
     IntoElement, InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -2232,8 +2233,12 @@ impl RootView {
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.tab;
+        // Responsif: di bawah 1020px baris kartu menumpuk vertikal
+        // (scroll menampung sisanya).
+        let vw: f32 = window.viewport_size().width.into();
+        let narrow = vw < 1020.0;
 
         // ---- sidebar nav ----
         let mut nav: Vec<Div> = Vec::new();
@@ -2278,6 +2283,7 @@ impl Render for RootView {
                     div()
                         .flex()
                         .flex_row()
+                        .when(narrow, |s| s.flex_col())
                         .gap_2()
                         .w_full()
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.temp_card()))
@@ -2288,6 +2294,7 @@ impl Render for RootView {
                     div()
                         .flex()
                         .flex_row()
+                        .when(narrow, |s| s.flex_col())
                         .gap_2()
                         .w_full()
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.gpu_card()))
@@ -2983,10 +2990,19 @@ fn main() {
 
         let view = app.new(|_| RootView::new(product, cpu_model, apply_tx));
 
-        let bounds = Bounds::centered(None, gpui::size(px(1280.), px(840.)), app);
+        // Ukuran default proper: lega di 1080p (3 kolom kartu muat),
+        // minimum di bawahnya breakpoint responsif + scroll yang ambil alih.
+        let bounds = Bounds::centered(None, gpui::size(px(1400.), px(900.)), app);
         app.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(gpui::size(px(1100.), px(700.))),
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some(SharedString::from("Axioo Control Center")),
+                    appears_transparent: false,
+                    traffic_light_position: None,
+                }),
+                app_id: Some("axioo-control-center".to_string()),
                 ..Default::default()
             },
             {
