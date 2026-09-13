@@ -8,6 +8,11 @@ pengganti Clevo Control Center versi Windows, ditulis ulang dari nol dalam Rust.
 > (`kbd set`, 3 zona di Studio X). GUI menulis langsung sebagai root
 > (relaunch via `pkexec` sekali di awal). Loop kurva kontinu milik
 > `axiood` di masa depan (belum ada).
+>
+> **Teruji hanya di Pongo Studio X 2025 (X560WNR-SU9)** — belum semua
+> Pongo. Model lain (terutama tipe backlight/EC berbeda) butuh validasi
+> sendiri sebelum tulis; mulai dari `probe` + `fan dump` + `kbd status`
+> (read-only).
 
 ## Prasyarat driver (wajib buat Pongo)
 

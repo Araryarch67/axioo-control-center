@@ -1,6 +1,10 @@
-//! Batteries from `/sys/class/power_supply`.
+//! Batteries from `/sys/class/power_supply`, incl. FlexiCharger-style
+//! charge thresholds (standard kernel `charge_control_*` attributes,
+//! firmware-mediated — same safety class as LED sysfs writes).
 
+use std::fmt;
 use std::fs;
+use std::io;
 
 use crate::{parse_f64, read_trim_str};
 
@@ -55,4 +59,79 @@ pub fn batteries() -> Vec<Battery> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// Discrete steps the firmware accepts, e.g. `[40, 50, 60, 70, 80, 95]`.
+/// `which` is `"start"` or `"end"`. Empty when unsupported/unreadable.
+pub fn charge_available(name: &str, which: &str) -> Vec<u64> {
+    let path = format!("/sys/class/power_supply/{name}/charge_control_{which}_available_thresholds");
+    read_trim_str(&path)
+        .map(|s| {
+            s.split_whitespace().filter_map(|p| p.parse().ok()).collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Failure modes for [`set_charge_thresholds`].
+#[derive(Debug)]
+pub enum ChargeError {
+    NoDevice { detail: String },
+    /// Value not in the firmware's available list.
+    NotAllowed { which: String, value: u64, allowed: Vec<u64> },
+    Io(io::Error),
+}
+
+impl fmt::Display for ChargeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ChargeError::NoDevice { detail } => write!(f, "no battery {detail}"),
+            ChargeError::NotAllowed { which, value, allowed } => {
+                let list = allowed.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+                write!(f, "{which} threshold {value} not allowed (pilih: {list})")
+            }
+            ChargeError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied => write!(
+                f,
+                "permission denied writing charge thresholds (need root). Re-run with sudo"
+            ),
+            ChargeError::Io(e) => write!(f, "sysfs write failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ChargeError {}
+
+/// Set charge start/end thresholds (each `None` = biarkan).
+/// Values validated against the firmware's available lists.
+pub fn set_charge_thresholds(
+    name: &str,
+    start: Option<u64>,
+    end: Option<u64>,
+) -> Result<(), ChargeError> {
+    let base = format!("/sys/class/power_supply/{name}");
+    if !std::path::Path::new(&base).exists() {
+        return Err(ChargeError::NoDevice { detail: format!("{base} absent") });
+    }
+    for (which, val) in [("start", start), ("end", end)].into_iter().filter_map(|(w, v)| v.map(|x| (w, x))) {
+        let allowed = charge_available(name, which);
+        if !allowed.is_empty() && !allowed.contains(&val) {
+            return Err(ChargeError::NotAllowed { which: which.to_string(), value: val, allowed });
+        }
+        fs::write(format!("{base}/charge_control_{which}_threshold"), val.to_string())
+            .map_err(ChargeError::Io)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_disallowed_values() {
+        // Against a fake sysfs-less name the device check fires first.
+        assert!(matches!(
+            set_charge_thresholds("BAT-DOES-NOT-EXIST", Some(80), None),
+            Err(ChargeError::NoDevice { .. })
+        ));
+    }
 }

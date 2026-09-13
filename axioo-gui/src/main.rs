@@ -127,6 +127,15 @@ struct GpuRow {
     clock_mhz: Option<u64>,
 }
 
+/// Ukuran viewport + ujung konten buat scrollbar (ditulis paint canvas,
+/// dibaca render frame berikut — jeda 1 frame, tak terasa).
+#[derive(Clone, Copy, Default)]
+struct ScrollMeas {
+    view_h: f32,
+    start_y: f32,
+    end_y: f32,
+}
+
 #[derive(Clone, Default)]
 struct SensorData {
     cpu_temp_line: String,
@@ -168,6 +177,12 @@ struct RootView {
     drag_point: Option<usize>,
     /// Zona keyboard target tulis (None = semua zona).
     kbd_zone_sel: Option<usize>,
+    /// Popup color picker custom RGB terbuka.
+    show_rgb_popup: bool,
+    /// Warna custom yang sedang diracik.
+    custom_rgb: (u8, u8, u8),
+    /// Channel slider (0=R,1=G,2=B) yang sedang di-drag.
+    drag_rgb: Option<usize>,
     tab: Tab,
     notice: Option<String>,
     /// True saat worker tulis EC berjalan.
@@ -175,6 +190,10 @@ struct RootView {
     apply_tx: std::sync::mpsc::Sender<String>,
     /// Toast aktif (None = tidak ada).
     toast: Option<Toast>,
+    /// Offset scroll vertikal konten (px); reset tiap pindah tab.
+    scroll_px: f32,
+    /// Ukuran viewport + ujung konten (buat thumb scrollbar).
+    scroll_meas: std::rc::Rc<std::cell::Cell<ScrollMeas>>,
 }
 
 impl RootView {
@@ -194,6 +213,9 @@ impl RootView {
             mode_auto: true,
             drag_point: None,
             kbd_zone_sel: None,
+            show_rgb_popup: false,
+            custom_rgb: (255, 255, 255),
+            drag_rgb: None,
             tab: Tab::Dashboard,
             notice: if fan_ctrl::is_root() {
                 None
@@ -203,6 +225,8 @@ impl RootView {
             apply_busy: false,
             apply_tx,
             toast: None,
+            scroll_px: 0.0,
+            scroll_meas: std::rc::Rc::new(std::cell::Cell::new(ScrollMeas::default())),
         }
     }
 
@@ -257,6 +281,15 @@ impl RootView {
             format!("kurva {why} → {snap}% (snapshot {temp})"),
         );
     }
+    /// Batas scroll = tinggi konten − tinggi viewport (dari ukur frame lalu).
+    fn scroll_max(&self) -> f32 {
+        let m = self.scroll_meas.get();
+        if m.view_h <= 0.0 {
+            return 0.0;
+        }
+        ((m.end_y - m.start_y) - m.view_h).clamp(0.0, 4000.0)
+    }
+
     /// Tulis EC satu-kali di thread latar: langsung via `fan_ctrl`;
     /// kalau proses bukan root (`NotRoot`), otomatis fallback pkexec.
     /// Hasil ke toast + notice pendek.
@@ -405,6 +438,35 @@ fn glow(rgb: (u8, u8, u8), scale: f32) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
+/// Padding dalam picker RGB; dipakai paint + hit-test.
+const RGB_PAD: f32 = 10.0;
+const RGB_ROWS: usize = 3;
+
+/// Kolom-x knob untuk nilai 0..255 di canvas selebar w.
+fn rgb_knob_x(val: u8, w: f32) -> f32 {
+    RGB_PAD + val as f32 / 255.0 * (w - 2.0 * RGB_PAD)
+}
+
+/// Posisi piksel-dalam-canvas → (channel 0=R,1=G,2=B, nilai 0..255).
+fn rgb_xy_to_val(lx: f32, ly: f32, w: f32, h: f32) -> (usize, u8) {
+    let row_h = (h - 2.0 * RGB_PAD) / RGB_ROWS as f32;
+    let ch = ((ly - RGB_PAD) / row_h).floor().clamp(0.0, 2.0) as usize;
+    let v = ((lx - RGB_PAD) / (w - 2.0 * RGB_PAD) * 255.0)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    (ch, v)
+}
+
+/// Warna track slider channel c pada fraksi 0..1 (hitam → channel penuh).
+fn rgb_track_color(c: usize, f: f32) -> u32 {
+    let v = (f.clamp(0.0, 1.0) * 255.0).round() as u32;
+    match c {
+        0 => v << 16,
+        1 => v << 8,
+        _ => v,
+    }
+}
+
 // ---------- mono widgets ----------
 
 /// Tombol kotak mono. `primary` = pill putih teks gelap.
@@ -433,6 +495,32 @@ fn btn(
         .cursor_pointer()
         .hover(move |s| s.bg(rgb(hover_bg)))
         .active(move |s| s.bg(rgb(press_bg)))
+        .child(label.to_string())
+        .on_click(cx.listener(f))
+}
+
+/// Tombol kompak (baris editor kurva): padding + teks kecil, anti-wrap.
+fn btn_sm(
+    id: &str,
+    label: &str,
+    cx: &mut Context<RootView>,
+    f: impl Fn(&mut RootView, &ClickEvent, &mut Window, &mut Context<RootView>) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(id.to_string()))
+        .px_2()
+        .py_1()
+        .rounded_md()
+        .bg(rgb(PANEL))
+        .border_1()
+        .border_color(rgb(lighten(BORDER, 0.3)))
+        .text_color(rgb(TEXT))
+        .text_xs()
+        .whitespace_nowrap()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgb(lighten(PANEL, 0.35))))
+        .active(move |s| s.bg(rgb(darken(PANEL, 0.3))))
         .child(label.to_string())
         .on_click(cx.listener(f))
 }
@@ -907,7 +995,7 @@ fn curve_chart(
                 },
             )
             .w_full()
-            .h(px(190.)),
+            .h(px(150.)),
         )
         .on_mouse_down(
             MouseButton::Left,
@@ -1306,7 +1394,8 @@ impl RootView {
         card("GPU", items)
     }
 
-    fn fan_state_card(&self) -> Div {
+    /// Kartu kipas ringkas (Dashboard): duty + RPM + pratinjau kurva.
+    fn fan_mini_card(&self) -> Div {
         let (rpm1, rpm2) = self.fan_rpms();
         let duty = self.shown_duty().map_or("-".to_string(), |d| format!("{d}%"));
         let state = if self.fan_manual {
@@ -1328,9 +1417,6 @@ impl RootView {
                 kv("FAN 1", format!("{rpm1} RPM")),
                 kv("FAN 2", format!("{rpm2} RPM")),
                 div().text_color(rgb(DIM)).text_xs().truncate().child(preview),
-                div().text_color(rgb(FAINT)).text_xs().line_clamp(2).child(
-                    self.data.ec_err.clone().unwrap_or_else(|| "EC: live".to_string()),
-                ),
             ],
         )
     }
@@ -1342,6 +1428,14 @@ impl RootView {
             format!("● KONTROL: MANUAL {}% — langsung tulis EC", self.manual_duty)
         } else {
             "● KONTROL: AUTO (EC) — langsung tulis EC".to_string()
+        };
+        let (rpm1, rpm2) = self.fan_rpms();
+        let preview = match self.data.max_temp_c {
+            Some(t) => {
+                let d = fan::curve_duty(&self.curve, t);
+                format!("live {t}°C → {d}% · kurva {}", self.mode)
+            }
+            None => "live —".to_string(),
         };
         card(
             "KONTROL",
@@ -1418,10 +1512,17 @@ impl RootView {
                     .child(
                         div()
                             .text_color(rgb(WHITE))
-                            .text_size(px(34.))
+                            .text_size(px(30.))
                             .font_weight(gpui::FontWeight::BOLD)
+                            .flex_shrink_0()
                             .child(duty_txt),
                     ),
+                kv("FAN 1", format!("{rpm1} RPM")),
+                kv("FAN 2", format!("{rpm2} RPM")),
+                div().text_color(rgb(DIM)).text_xs().truncate().child(preview),
+                div().text_color(rgb(FAINT)).text_xs().truncate().child(
+                    self.data.ec_err.clone().unwrap_or_else(|| "EC: live".to_string()),
+                ),
             ],
         )
     }
@@ -1447,27 +1548,27 @@ impl RootView {
                             .flex()
                             .flex_row()
                             .gap_1()
-                            .child(btn(&format!("ct-{i}-"), "−T", false, cx, move |v, _, _, cx| {
+                            .child(btn_sm(&format!("ct-{i}-"), "−T", cx, move |v, _, _, cx| {
                                 edit_temp(v, i, -5);
                                 v.curve_live(cx, "edit");
                                 cx.notify();
                             }))
-                            .child(btn(&format!("ct-{i}+"), "+T", false, cx, move |v, _, _, cx| {
+                            .child(btn_sm(&format!("ct-{i}+"), "+T", cx, move |v, _, _, cx| {
                                 edit_temp(v, i, 5);
                                 v.curve_live(cx, "edit");
                                 cx.notify();
                             }))
-                            .child(btn(&format!("cd-{i}-"), "−D", false, cx, move |v, _, _, cx| {
+                            .child(btn_sm(&format!("cd-{i}-"), "−D", cx, move |v, _, _, cx| {
                                 edit_duty(v, i, -5);
                                 v.curve_live(cx, "edit");
                                 cx.notify();
                             }))
-                            .child(btn(&format!("cd-{i}+"), "+D", false, cx, move |v, _, _, cx| {
+                            .child(btn_sm(&format!("cd-{i}+"), "+D", cx, move |v, _, _, cx| {
                                 edit_duty(v, i, 5);
                                 v.curve_live(cx, "edit");
                                 cx.notify();
                             }))
-                            .child(btn(&format!("cdel-{i}"), "×", false, cx, move |v, _, _, cx| {
+                            .child(btn_sm(&format!("cdel-{i}"), "×", cx, move |v, _, _, cx| {
                                 if v.curve.len() > 1 {
                                     v.curve.remove(i);
                                     v.mark_custom();
@@ -1505,14 +1606,18 @@ impl RootView {
                 .child(div().child("80°".to_string()))
                 .child(div().child("100°".to_string())),
             div()
-                .text_color(rgb(FAINT))
-                .text_xs()
-                .child("drag titik untuk ubah · presisi via tombol ±T/±D di bawah".to_string()),
-            div()
                 .flex()
                 .flex_row()
+                .items_center()
                 .gap_2()
-                .child(btn("c-add", "+ titik", false, cx, |v, _, _, cx| {
+                .w_full()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .flex_shrink_0()
+                        .child(btn("c-add", "+ titik", false, cx, |v, _, _, cx| {
                     let (lt, _) = v.curve.last().copied().unwrap_or((20, 40));
                     v.curve.push(((lt + 10).min(100), fan::MAX_FAN_DUTY_PCT));
                     v.sort_curve();
@@ -1527,28 +1632,20 @@ impl RootView {
                     v.curve_live(cx, "reset");
                     cx.notify();
                 })),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .text_color(rgb(FAINT))
+                        .text_xs()
+                        .text_right()
+                        .truncate()
+                        .child("drag titik · ±T/±D presisi".to_string()),
+                ),
         ];
         items.extend(rows);
         card("KURVA", items)
-    }
-
-    fn ec_raw_card(&self) -> Div {
-        let mut items: Vec<Div> = Vec::new();
-        match self.data.ec {
-            Some(s) => {
-                items.push(kv("0x07 CPU", format!("{}°C", s.cpu_temp_raw)));
-                items.push(kv("0xCD GPU", if s.gpu_temp_raw == 0 { "tidur".to_string() } else { format!("{}°C", s.gpu_temp_raw) }));
-                items.push(kv("0xCE DUTY", format!("raw {} (~{}%)", s.fan1_duty_raw, s.fan1_duty_pct)));
-                items.push(kv("0xD0 RPM1", format!("{} ({:02X} {:02X})", s.fan1_rpm, s.rpm_regs[0], s.rpm_regs[1])));
-                items.push(kv("0xD2 RPM2", format!("{} ({:02X} {:02X})", s.fan2_rpm, s.rpm_regs[2], s.rpm_regs[3])));
-            }
-            None => items.push(
-                div().text_color(rgb(DIM)).text_sm().child(
-                    self.data.ec_err.clone().unwrap_or_else(|| "EC tak terbaca".to_string()),
-                ),
-            ),
-        }
-        card("EC MENTAH", items)
     }
 
     fn mem_card(&self) -> Div {
@@ -1802,6 +1899,171 @@ impl RootView {
         )
     }
 
+    /// Slider RGB custom: 3 bar drag (R/G/B). Pratinjau saat drag,
+    /// tulis ke zona target saat dilepas.
+    fn rgb_sliders(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let cell: std::rc::Rc<std::cell::Cell<Option<Bounds<gpui::Pixels>>>> =
+            std::rc::Rc::new(std::cell::Cell::new(None));
+        let cell_down = cell.clone();
+        let cell_move = cell.clone();
+        let cur = self.custom_rgb;
+        div()
+            .id(SharedString::from("rgb-picker"))
+            .w_full()
+            .child(
+                canvas(
+                    move |_bounds, _window, _cx| cur,
+                    move |bounds: Bounds<gpui::Pixels>,
+                          col: (u8, u8, u8),
+                          window: &mut Window,
+                          _cx: &mut App| {
+                        cell.set(Some(bounds));
+                        let w: f32 = bounds.size.width.into();
+                        let h: f32 = bounds.size.height.into();
+                        let ox: f32 = bounds.origin.x.into();
+                        let oy: f32 = bounds.origin.y.into();
+                        let vals = [col.0, col.1, col.2];
+                        let row_h = (h - 2.0 * RGB_PAD) / RGB_ROWS as f32;
+                        for c in 0..3 {
+                            let y0 = oy + RGB_PAD + c as f32 * row_h + 5.0;
+                            let y1 = oy + RGB_PAD + (c + 1) as f32 * row_h - 5.0;
+                            for s in 0..32 {
+                                let x0 = ox + RGB_PAD + s as f32 / 32.0 * (w - 2.0 * RGB_PAD);
+                                let x1 =
+                                    ox + RGB_PAD + (s + 1) as f32 / 32.0 * (w - 2.0 * RGB_PAD);
+                                let mut seg = PathBuilder::fill();
+                                seg.add_polygon(
+                                    &[
+                                        point(px(x0), px(y0)),
+                                        point(px(x1), px(y0)),
+                                        point(px(x1), px(y1)),
+                                        point(px(x0), px(y1)),
+                                    ],
+                                    true,
+                                );
+                                if let Ok(p) = seg.build() {
+                                    window.paint_path(p, rgb(rgb_track_color(c, s as f32 / 31.0)));
+                                }
+                            }
+                            let kx = ox + rgb_knob_x(vals[c], w);
+                            let mut knob = PathBuilder::stroke(px(2.0));
+                            knob.move_to(point(px(kx), px(y0 - 2.0)));
+                            knob.line_to(point(px(kx), px(y1 + 2.0)));
+                            if let Ok(p) = knob.build() {
+                                window.paint_path(p, rgb(WHITE));
+                            }
+                        }
+                    },
+                )
+                .w_full()
+                .h(px(108.)),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |v, ev: &MouseDownEvent, _window, cx| {
+                    let b = match cell_down.get() {
+                        Some(b) => b,
+                        None => return,
+                    };
+                    let w: f32 = b.size.width.into();
+                    let h: f32 = b.size.height.into();
+                    let ox: f32 = b.origin.x.into();
+                    let oy: f32 = b.origin.y.into();
+                    let ex: f32 = ev.position.x.into();
+                    let ey: f32 = ev.position.y.into();
+                    let (ch, val) = rgb_xy_to_val(ex - ox, ey - oy, w, h);
+                    match ch {
+                        0 => v.custom_rgb.0 = val,
+                        1 => v.custom_rgb.1 = val,
+                        _ => v.custom_rgb.2 = val,
+                    }
+                    v.drag_rgb = Some(ch);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(move |v, ev: &MouseMoveEvent, _window, cx| {
+                let ch = match v.drag_rgb {
+                    Some(c) => c,
+                    None => return,
+                };
+                let b = match cell_move.get() {
+                    Some(b) => b,
+                    None => return,
+                };
+                let w: f32 = b.size.width.into();
+                let h: f32 = b.size.height.into();
+                let ox: f32 = b.origin.x.into();
+                let oy: f32 = b.origin.y.into();
+                let ex: f32 = ev.position.x.into();
+                let ey: f32 = ev.position.y.into();
+                let (_, val) = rgb_xy_to_val(ex - ox, ey - oy, w, h);
+                match ch {
+                    0 => v.custom_rgb.0 = val,
+                    1 => v.custom_rgb.1 = val,
+                    _ => v.custom_rgb.2 = val,
+                }
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|v, _ev: &MouseUpEvent, _window, cx| {
+                    if v.drag_rgb.take().is_some() {
+                        let max = v.kbd_max();
+                        let tgt = v.kbd_zone_sel;
+                        let (cur_b, _) = v.kbd_zone_state(tgt);
+                        let b = if cur_b == 0 { max } else { cur_b };
+                        let rgb = v.custom_rgb;
+                        let t = Self::kbd_target_txt(tgt);
+                        v.kbd_apply(cx, b, rgb, tgt, format!("kbd {t} custom"));
+                        cx.notify();
+                    }
+                }),
+            )
+    }
+
+    /// Popup color picker custom RGB.
+    fn rgb_popup_card(&mut self, cx: &mut Context<Self>) -> Div {
+        let (r, g, b) = self.custom_rgb;
+        let hex = (r as u32) << 16 | (g as u32) << 8 | b as u32;
+        let items: Vec<AnyElement> = vec![
+            div()
+                .w_full()
+                .h(px(28.))
+                .rounded_md()
+                .bg(rgb(hex))
+                .border_1()
+                .border_color(rgb(BORDER))
+                .into_any_element(),
+            div().w_full().child(self.rgb_sliders(cx)).into_any_element(),
+            div()
+                .text_color(rgb(DIM))
+                .text_sm()
+                .truncate()
+                .child(format!("R {r} · G {g} · B {b} · #{hex:06X}"))
+                .into_any_element(),
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(btn("rgb-apply", "Terapkan", true, cx, |v, _, _, cx| {
+                    let max = v.kbd_max();
+                    let tgt = v.kbd_zone_sel;
+                    let (cur_b, _) = v.kbd_zone_state(tgt);
+                    let bb = if cur_b == 0 { max } else { cur_b };
+                    let rgb = v.custom_rgb;
+                    let t = Self::kbd_target_txt(tgt);
+                    v.kbd_apply(cx, bb, rgb, tgt, format!("kbd {t} custom"));
+                    cx.notify();
+                }))
+                .child(btn("rgb-close", "Tutup", false, cx, |v, _, _, cx| {
+                    v.show_rgb_popup = false;
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ];
+        card("CUSTOM RGB", items)
+    }
+
     fn kbd_color_card(&mut self, cx: &mut Context<Self>) -> Div {
         const PRESETS: [(&str, (u8, u8, u8), u32); 7] = [
             ("red", (255, 0, 0), 0xFF0000),
@@ -1874,6 +2136,59 @@ impl RootView {
                     })),
             );
         }
+        // Tile Custom: buka/tutup popup color picker.
+        let custom_hex =
+            (self.custom_rgb.0 as u32) << 16 | (self.custom_rgb.1 as u32) << 8 | self.custom_rgb.2 as u32;
+        let custom_open = self.show_rgb_popup;
+        tiles.push(
+            div()
+                .id(SharedString::from("kbd-custom"))
+                .flex_1()
+                .min_w(px(96.))
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(rgb(PANEL2))
+                .border_1()
+                .border_color(rgb(if custom_open { WHITE } else { BORDER }))
+                .cursor_pointer()
+                .hover(move |s| s.bg(rgb(lighten(PANEL2, 0.2))))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(16.))
+                                .h(px(16.))
+                                .rounded_sm()
+                                .bg(rgb(custom_hex))
+                                .border_1()
+                                .border_color(rgb(BORDER)),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(if custom_open { WHITE } else { TEXT }))
+                                .text_sm()
+                                .whitespace_nowrap()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(format!("{}Custom", if custom_open { "● " } else { "" })),
+                        ),
+                )
+                .on_click(cx.listener(|v, _, _, cx| {
+                    if v.show_rgb_popup {
+                        v.show_rgb_popup = false;
+                    } else {
+                        let tgt = v.kbd_zone_sel;
+                        let (_, rgb) = v.kbd_zone_state(tgt);
+                        v.custom_rgb = rgb;
+                        v.show_rgb_popup = true;
+                    }
+                    cx.notify();
+                })),
+        );
         card(
             "WARNA",
             [
@@ -1940,6 +2255,7 @@ impl Render for RootView {
             let sel = tab == t;
             nav.push(div().w_full().child(nav_item(t, sel, cx, move |v, _, _, cx| {
                 v.tab = t;
+                v.scroll_px = 0.0;
                 cx.notify();
             })));
         }
@@ -1965,7 +2281,7 @@ impl Render for RootView {
                         .gap_2()
                         .w_full()
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.temp_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.fan_state_card()))
+                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.fan_mini_card()))
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.sys_card())),
                 )
                 .child(
@@ -2004,18 +2320,11 @@ impl Render for RootView {
                     div()
                         .flex()
                         .flex_row()
+                        .items_start()
                         .gap_2()
                         .w_full()
                         .child(div().flex().flex_col().w(px(340.)).flex_shrink_0().child(self.fan_control_card(cx)))
                         .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.curve_card(cx))),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
-                        .w_full()
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.fan_state_card())),
                 ),
             Tab::Keyboard => div()
                 .flex()
@@ -2114,6 +2423,43 @@ impl Render for RootView {
                 }))
                 .into_any_element(),
             None => div().into_any_element(),
+        };
+
+        // ---- scrollbar ala kit: thumb dari ukur frame lalu ----
+        let meas = self.scroll_meas.get();
+        let scroll_max = self.scroll_max();
+        let scrollbar_el: AnyElement = if scroll_max > 1.0 && meas.view_h > 0.0 {
+            let content_h = (scroll_max + meas.view_h).max(1.0);
+            let thumb_h = (meas.view_h * meas.view_h / content_h).clamp(24.0, meas.view_h);
+            let thumb_y = self.scroll_px / scroll_max * (meas.view_h - thumb_h);
+            div()
+                .absolute()
+                .top(px(thumb_y))
+                .right(px(2.))
+                .w(px(4.))
+                .h(px(thumb_h))
+                .rounded_sm()
+                .bg(rgb(DIM))
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        };
+        let meas_view = self.scroll_meas.clone();
+        let meas_end = self.scroll_meas.clone();
+        let meas_abs = self.scroll_meas.clone();
+        let scroll_offset = self.scroll_px;
+
+        // ---- popup custom RGB: kanan-atas, hanya di tab Keyboard ----
+        let popup_el: AnyElement = if self.show_rgb_popup && self.tab == Tab::Keyboard {
+            div()
+                .absolute()
+                .top(px(56.))
+                .right(px(16.))
+                .w(px(300.))
+                .child(self.rgb_popup_card(cx))
+                .into_any_element()
+        } else {
+            div().into_any_element()
         };
 
         div()
@@ -2288,7 +2634,84 @@ impl Render for RootView {
                             )
                             .child(div().text_color(rgb(DIM)).text_sm().child(tab.desc().to_string())),
                     )
-                    .child(div().flex_1().overflow_hidden().px_4().py_3().child(content))
+                    .child(
+                        div()
+                            .id(SharedString::from("scroll-body"))
+                            .flex_1()
+                            .min_h(px(0.))
+                            .relative()
+                            .overflow_hidden()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .mt(px(-scroll_offset))
+                                    .px_4()
+                                    .py_3()
+                                    .child(
+                                        canvas(
+                                            move |_bounds, _window, _cx| (),
+                                            move |bounds: Bounds<gpui::Pixels>,
+                                                  _: (),
+                                                  _: &mut Window,
+                                                  _: &mut App| {
+                                                let oy: f32 = bounds.origin.y.into();
+                                                let mut m = meas_view.get();
+                                                m.start_y = oy;
+                                                meas_view.set(m);
+                                            },
+                                        )
+                                        .w_full()
+                                        .h(px(1.)),
+                                    )
+                                    .child(content)
+                                    .child(
+                                        canvas(
+                                            move |_bounds, _window, _cx| (),
+                                            move |bounds: Bounds<gpui::Pixels>,
+                                                  _: (),
+                                                  _: &mut Window,
+                                                  _: &mut App| {
+                                                let oy: f32 = bounds.origin.y.into();
+                                                let h: f32 = bounds.size.height.into();
+                                                let mut m = meas_end.get();
+                                                m.end_y = oy + h;
+                                                meas_end.set(m);
+                                            },
+                                        )
+                                        .w_full()
+                                        .h(px(1.)),
+                                    ),
+                            )
+                            .child(scrollbar_el)
+                            .child(
+                                canvas(
+                                    move |_bounds, _window, _cx| (),
+                                    move |bounds: Bounds<gpui::Pixels>,
+                                          _: (),
+                                          _: &mut Window,
+                                          _: &mut App| {
+                                        let h: f32 = bounds.size.height.into();
+                                        let mut m = meas_abs.get();
+                                        m.view_h = h;
+                                        meas_abs.set(m);
+                                    },
+                                )
+                                .absolute()
+                                .top(px(0.))
+                                .bottom(px(0.))
+                                .left(px(0.))
+                                .right(px(0.)),
+                            )
+                            .on_scroll_wheel(|ev, window, cx| {
+                                if let Some(Some(root)) = window.root::<RootView>() {
+                                    cx.update_entity(&root, |v, _| {
+                                        let dy: f32 = ev.delta.pixel_delta(px(16.)).y.into();
+                                        v.scroll_px = (v.scroll_px + dy).clamp(0.0, v.scroll_max());
+                                    });
+                                    window.refresh();
+                                }
+                            }),
+                    )
                     // bottom action bar
                     .child(
                         div()
@@ -2330,6 +2753,7 @@ impl Render for RootView {
                     ),
             )
             .child(toast_el)
+            .child(popup_el)
     }
 }
 
@@ -2498,9 +2922,22 @@ fn ensure_root_or_relaunch() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut cmd = std::process::Command::new("pkexec");
     cmd.arg("env");
-    for key in ["WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DISPLAY"] {
-        if let Ok(val) = std::env::var(key) {
-            cmd.arg(format!("{key}={val}"));
+    // Display/Wayland penting agar window root bisa dibuka di sesi user.
+    // XAUTHORITY wajib eksplisit: tanpa ini Xlib jatuh ke /root/.Xauthority
+    // ("Authorization required, but no authorization protocol specified").
+    let xauth = std::env::var("XAUTHORITY").ok().filter(|v| !v.is_empty()).or_else(|| {
+        std::env::var("HOME").ok().map(|h| format!("{h}/.Xauthority"))
+    });
+    for (key, val) in [
+        ("WAYLAND_DISPLAY", std::env::var("WAYLAND_DISPLAY").ok()),
+        ("XDG_RUNTIME_DIR", std::env::var("XDG_RUNTIME_DIR").ok()),
+        ("DISPLAY", std::env::var("DISPLAY").ok()),
+        ("XAUTHORITY", xauth),
+    ] {
+        if let Some(v) = val {
+            if !v.is_empty() {
+                cmd.arg(format!("{key}={v}"));
+            }
         }
     }
     cmd.arg(&exe);
@@ -2637,5 +3074,16 @@ mod tests {
         assert_eq!(chart_duty_at(&pts, 20), 40);
         assert_eq!(chart_duty_at(&pts, 40), 60);
         assert_eq!(chart_duty_at(&pts, 100), 80);
+    }
+
+    #[test]
+    fn rgb_slider_roundtrip() {
+        let (ch, v) = rgb_xy_to_val(60.0, 20.0, 300.0, 108.0);
+        assert_eq!(ch, 0);
+        let x = rgb_knob_x(v, 300.0);
+        assert!((x - 60.0).abs() < 3.0);
+        assert_eq!(rgb_track_color(0, 1.0), 0xFF0000);
+        assert_eq!(rgb_track_color(1, 0.5), 0x008000);
+        assert_eq!(rgb_track_color(2, 0.0), 0x000000);
     }
 }
