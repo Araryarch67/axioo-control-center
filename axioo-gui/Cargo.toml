@@ -1,0 +1,13 @@
+[package]
+name = "axioo-gui"
+version = "0.1.0"
+edition = "2021"
+description = "GPUI desktop GUI for axioo-control-center (Axioo / Clevo Linux control)"
+
+[[bin]]
+name = "axioo-control-center"
+path = "src/main.rs"
+
+[dependencies]
+axioo-lib = { path = "../axioo-lib" }
+gpui = "0.2"

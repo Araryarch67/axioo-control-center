@@ -1,0 +1,3 @@
+[workspace]
+members = ["axioo-lib", "axioo-ctl", "axioo-gui"]
+resolver = "2"

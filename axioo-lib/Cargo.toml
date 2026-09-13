@@ -1,0 +1,7 @@
+[package]
+name = "axioo-lib"
+version = "0.1.0"
+edition = "2021"
+description = "Read-only hardware introspection library for Axioo Pongo / Clevo laptops on Linux"
+
+[dependencies]

@@ -1,0 +1,13 @@
+[package]
+name = "axioo-ctl"
+version = "0.1.0"
+edition = "2021"
+description = "Linux control utility for Axioo Pongo / Clevo laptops (read-only MVP: probe + monitor)"
+
+[[bin]]
+name = "axioo-ctl"
+path = "src/main.rs"
+
+[dependencies]
+axioo-lib = { path = "../axioo-lib" }
+clap = { version = "4", features = ["derive"] }
