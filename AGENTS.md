@@ -27,8 +27,8 @@ cargo build -p axioo-lib -p axioo-ctl # build yang stabil
   `fan set 100` terbukti via CLI).
 - **Loop kurva kontinu / tulis EC selain one-shot di atas hanya milik
   daemon root di masa depan (`axiood`), tidak pernah dari CLI/GUI
-  langsung.** GUI menerapkan one-shot langsung via `fan_ctrl` (root);
-  otomatis fallback `pkexec` sekali saat proses GUI bukan root.
+  langsung.** GUI memastikan diri root (relaunch via `pkexec` sekali di
+  awal bila euid != 0), lalu one-shot langsung via `fan_ctrl`.
 - Quirk driver kernel dibatasi DMI board + tipe tak dikenal saja;
   jangan override tipe yang sudah dikenal driver.
 
@@ -38,12 +38,12 @@ cargo build -p axioo-lib -p axioo-ctl # build yang stabil
 |---|-------|--------|
 | 0 | `probe`, `monitor`, `kbd status/get/set`, docs, README+credits | ✅ selesai, terverifikasi di Pongo Studio X (2025) |
 | 1 | GUI live sensor (GPUI) | 🔄 COMPILE HIJAU + runtime stabil (2026-09-13: survive 6 dtk tanpa crash); redesign gaming-center DONE: sidebar nav (Dashboard/Performa/Kipas/Daya), mode strip Quiet/Balanced/Entertainment/Performance, gauge CPU canvas, chart kurva kipas canvas + editor titik, kartu GPU/Mem/Baterai/RAPL, pill status EC — butuh uji visual user + verify live update |
-| 2 | Backlight keyboard Studio X | 🔄 driver SUDAH loaded (`clevo_acpi/wmi`, `tuxedo_keyboard`) tapi node LED tetap absen → teori tipe `0x17` tak dikenal terkonfirmasi; langkah berikut patch quirk DKMS (lihat ide solusi) |
+| 2 | Backlight keyboard Studio X | ✅ quirk TERBUKTI (`packaging/clevo-drivers-axioo`, force 3-zone untuk tipe `0x17`): 3 node LED + tulis OK via CLI; panel GUI Keyboard DONE (status/brightness/preset/visualizer per-zona) |
 | 3 | Kontrol kipas (`axioo-ctl fan`) | ✅ peta TERVALIDASI idle di Studio X (2026-09-13: `0x07`=61C vs pkg 64C, RPM EC persis = hwmon 2422/2015, konsisten 5+ sampel); tooling read-only DONE (`fan dump` + `fan watch` + `fan curve` + tests); konfirmasi tracking saat load DIPARKIR atas permintaan user → langsung desain `axiood` saat dibutuhkan |
 | 4 | Daemon `axiood` + D-Bus + profil | ⬜ belum mulai |
 | 5 | Profil CPU/GPU (RAPL, cpufreq, NVIDIA) | ⬜ belum mulai |
 | 6 | Charge threshold baterai | ⬜ belum mulai |
-| 7 | Fn-keys brightness di Hyprland | ⬜ diblokir oleh #2 (butuh LED dulu) |
+| 7 | Fn-keys brightness di Hyprland | 🔄 LED ADA (quirk #2) + CLI `kbd brighter/dimmer` DONE; sisa bind di `hyprland.conf` ke input `TUXEDO Keyboard` |
 | 8 | Packaging AUR + systemd + udev | ⬜ belum mulai |
 | 9 | Upstream quirk ke clevo-drivers | ⬜ setelah #2 terbukti |
 | 10 | Per-key RGB sejati via EC | ⬜ riset; butuh reverse-engineering |

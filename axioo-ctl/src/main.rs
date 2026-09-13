@@ -80,6 +80,10 @@ enum KbdCmd {
     Status,
     /// Print current brightness + RGB.
     Get,
+    /// Naikkan brightness 1 langkah (untuk bind Fn-keys).
+    Brighter,
+    /// Turunkan brightness 1 langkah (untuk bind Fn-keys).
+    Dimmer,
     /// Set brightness and/or color.
     Set {
         /// Raw brightness value (clamped to the driver's max_brightness).
@@ -113,6 +117,8 @@ fn main() {
         Cmd::Kbd { cmd } => match cmd {
             KbdCmd::Status => kbd::status(),
             KbdCmd::Get => kbd::get(),
+            KbdCmd::Brighter => kbd::brighter(),
+            KbdCmd::Dimmer => kbd::dimmer(),
             KbdCmd::Set { brightness, rgb, preset, dry_run } => {
                 kbd::set(brightness, rgb, preset, dry_run)
             }

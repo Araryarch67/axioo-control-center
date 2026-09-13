@@ -4,11 +4,11 @@
 //! pill seleksi putih, barcode, bottom action bar). Font: Iosevka Nerd
 //! Font Mono. Sidebar bernomor + label Jepang, konten per tab.
 //!
-//! Privilege: tombol tulis EC memanggil `axioo-lib::fan_ctrl` langsung
-//! (one-shot `set|auto`) di background thread. Idealnya GUI jalan
-//! sebagai root (tanpa prompt); kalau bukan root, otomatis fallback
-//! `pkexec axioo-ctl fan ...` (satu prompt, lalu polkit keep-alive).
-//! Loop kurva kontinu tetap milik `axiood` di masa depan.
+//! Privilege: app memastikan diri jalan sebagai root — bila euid != 0,
+//! relaunch diri via `pkexec` SEKALI di awal (env Wayland diteruskan).
+//! Tombol tulis EC memanggil `axioo-lib::fan_ctrl` langsung (one-shot
+//! `set|auto`) di background thread; fallback pkexec per-aksi hanya bila
+//! relaunch dibatalkan/gagal. Loop kurva kontinu tetap milik `axiood`.
 
 use std::time::{Duration, Instant};
 
@@ -17,8 +17,7 @@ use axioo_lib::{
     cpu::CpuTimes,
     dmi, ec,
     fan::{self, FanSnapshot},
-    fan_ctrl,
-    hwmon, memory, nvidia, rapl,
+    fan_ctrl, hwmon, kbd, memory, nvidia, rapl,
 };
 use gpui::{
     AnyElement, App, AppContext, Application, AsyncApp, Bounds, ClickEvent, Context, Div,
@@ -71,6 +70,7 @@ enum Tab {
     Dashboard,
     Performa,
     Kipas,
+    Keyboard,
     Daya,
 }
 
@@ -80,6 +80,7 @@ impl Tab {
             Tab::Dashboard => "Dashboard",
             Tab::Performa => "Performa",
             Tab::Kipas => "Kipas",
+            Tab::Keyboard => "Keyboard",
             Tab::Daya => "Daya",
         }
     }
@@ -89,6 +90,7 @@ impl Tab {
             Tab::Dashboard => "概要",
             Tab::Performa => "性能",
             Tab::Kipas => "ファン",
+            Tab::Keyboard => "キーボード",
             Tab::Daya => "電源",
         }
     }
@@ -96,7 +98,7 @@ impl Tab {
     fn section(self) -> &'static str {
         match self {
             Tab::Dashboard | Tab::Performa => "01 MONITOR",
-            Tab::Kipas => "02 CONTROL",
+            Tab::Kipas | Tab::Keyboard => "02 CONTROL",
             Tab::Daya => "03 SYSTEM",
         }
     }
@@ -106,12 +108,13 @@ impl Tab {
             Tab::Dashboard => "Ringkasan live: suhu, kipas, dan daya dalam satu pandang.",
             Tab::Performa => "Mode performa dan kurva pratinjau kipas.",
             Tab::Kipas => "Kontrol manual satu-kali langsung (root). Loop kontinu butuh axiood.",
+            Tab::Keyboard => "Backlight keyboard: brightness + warna (butuh quirk DKMS).",
             Tab::Daya => "Baterai, memori, dan daya paket CPU (RAPL).",
         }
     }
 
-    fn all() -> [Tab; 4] {
-        [Tab::Dashboard, Tab::Performa, Tab::Kipas, Tab::Daya]
+    fn all() -> [Tab; 5] {
+        [Tab::Dashboard, Tab::Performa, Tab::Kipas, Tab::Keyboard, Tab::Daya]
     }
 }
 
@@ -141,6 +144,12 @@ struct SensorData {
     ec: Option<FanSnapshot>,
     ec_err: Option<String>,
     max_temp_c: Option<i32>,
+    kbd_nodes: usize,
+    kbd_max: u32,
+    kbd_brightness: Option<u32>,
+    kbd_rgb: Option<(u8, u8, u8)>,
+    /// Per-zona (brightness, rgb) sesuai urutan discover (0=kiri).
+    kbd_zones: Vec<(u32, (u8, u8, u8))>,
     stamp: String,
 }
 
@@ -386,6 +395,16 @@ fn darken(c: u32, amt: f32) -> u32 {
     (mix((c >> 16) & 0xFF) << 16) | (mix((c >> 8) & 0xFF) << 8) | mix(c & 0xFF)
 }
 
+/// Skalakan RGB backlight dengan brightness (0..1) jadi hex u32.
+/// Murni (ada unit test): glow((255,0,0), 1.0) == 0xFF0000.
+fn glow(rgb: (u8, u8, u8), scale: f32) -> u32 {
+    let s = scale.clamp(0.0, 1.0);
+    let r = (rgb.0 as f32 * s).round() as u32;
+    let g = (rgb.1 as f32 * s).round() as u32;
+    let b = (rgb.2 as f32 * s).round() as u32;
+    (r << 16) | (g << 8) | b
+}
+
 // ---------- mono widgets ----------
 
 /// Tombol kotak mono. `primary` = pill putih teks gelap.
@@ -409,6 +428,7 @@ fn btn(
         .border_color(rgb(if primary { bd } else { lighten(BORDER, 0.3) }))
         .text_color(rgb(fg))
         .text_sm()
+        .whitespace_nowrap()
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
         .hover(move |s| s.bg(rgb(hover_bg)))
@@ -1598,6 +1618,269 @@ impl RootView {
             ],
         )
     }
+
+    /// Tulis backlight langsung (sysfs LED, aman; root) ke SEMUA zona.
+    /// Sinkron (±ms) + hasil ke toast.
+    fn kbd_apply(
+        &mut self,
+        cx: &mut Context<Self>,
+        brightness: u32,
+        rgb: (u8, u8, u8),
+        label: String,
+    ) {
+        let devs = kbd::discover();
+        if devs.is_empty() {
+            self.toast = Some(Toast {
+                text: format!("{label}: gagal: LED keyboard tak ada (quirk DKMS?)"),
+                at: Instant::now(),
+                error: true,
+            });
+            cx.notify();
+            return;
+        }
+        let mut fails = 0;
+        for d in &devs {
+            if kbd::set(d, brightness, rgb).is_err() {
+                fails += 1;
+            }
+        }
+        self.toast = Some(Toast {
+            text: if fails == 0 {
+                format!("{label}: OK ({} zona)", devs.len())
+            } else {
+                format!("{label}: gagal di {fails}/{} zona", devs.len())
+            },
+            at: Instant::now(),
+            error: fails != 0,
+        });
+        cx.notify();
+    }
+
+    fn kbd_max(&self) -> u32 {
+        if self.data.kbd_max == 0 {
+            255
+        } else {
+            self.data.kbd_max
+        }
+    }
+
+    /// Visualizer keyboard: 5×15 key menyala ikut warna × brightness
+    /// per zona (sepertiga kolom = zona 0/1/2).
+    fn kbd_visual_card(&self) -> Div {
+        let max = self.kbd_max().max(1) as f32;
+        let mut rows: Vec<Div> = Vec::with_capacity(5);
+        for _ in 0..5 {
+            let mut groups: Vec<Div> = Vec::with_capacity(3);
+            for z in 0..3 {
+                let (b, col) = self.data.kbd_zones.get(z).copied().unwrap_or((0, (0, 0, 0)));
+                let g = glow(col, b as f32 / max);
+                let bc = if g == 0 { BORDER } else { g };
+                let mut keys: Vec<Div> = Vec::with_capacity(5);
+                for _ in 0..5 {
+                    keys.push(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .h(px(24.))
+                            .rounded_sm()
+                            .bg(rgb(PANEL2))
+                            .border_1()
+                            .border_color(rgb(bc)),
+                    );
+                }
+                groups.push(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(3.))
+                        .flex_1()
+                        .min_w(px(0.))
+                        .children(keys),
+                );
+            }
+            rows.push(div().flex().flex_row().gap_2().w_full().children(groups));
+        }
+        let zone_txt = if self.data.kbd_zones.is_empty() {
+            "LED tak ada".to_string()
+        } else {
+            self.data
+                .kbd_zones
+                .iter()
+                .enumerate()
+                .map(|(i, (b, (r, g, bl)))| format!("Z{} {b} #{r:02X}{g:02X}{bl:02X}", i + 1))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        card(
+            "VISUAL",
+            [
+                div().flex().flex_col().gap_1().w_full().children(rows),
+                div().text_color(rgb(DIM)).text_xs().truncate().child(zone_txt),
+            ],
+        )
+    }
+
+    fn kbd_status_card(&self) -> Div {        if self.data.kbd_nodes == 0 {
+            return card(
+                "KEYBOARD",
+                [
+                    div().text_color(rgb(TEXT)).text_sm().child("LED tak ada".to_string()),
+                    div().text_color(rgb(DIM)).text_xs().child(
+                        "butuh quirk DKMS 0x17 (packaging/clevo-drivers-axioo)".to_string(),
+                    ),
+                ],
+            );
+        }
+        let rgb_txt = self
+            .data
+            .kbd_rgb
+            .map_or("-".to_string(), |(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"));
+        card(
+            "KEYBOARD",
+            [
+                kv("NODE", format!("{} zona", self.data.kbd_nodes)),
+                kv("MAX", self.data.kbd_max.to_string()),
+                kv(
+                    "NYALA",
+                    match self.data.kbd_brightness {
+                        Some(b) => format!("{b} · {rgb_txt}"),
+                        None => "-".to_string(),
+                    },
+                ),
+            ],
+        )
+    }
+
+    fn kbd_bright_card(&mut self, cx: &mut Context<Self>) -> Div {
+        let max = self.kbd_max();
+        let cur = self.data.kbd_brightness.unwrap_or(0);
+        let pct = Some(cur as f64 / max.max(1) as f64 * 100.0);
+        card(
+            "BRIGHTNESS",
+            [
+                hero_number(format!("{cur}"), format!("/ {max}")),
+                segbar(pct),
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(btn("kb-", "−", false, cx, move |v, _, _, cx| {
+                        let max = v.kbd_max();
+                        let cur = v.data.kbd_brightness.unwrap_or(0);
+                        let rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        let b = cur.saturating_sub((max / 10).max(1));
+                        v.kbd_apply(cx, b, rgb, format!("kbd brightness → {b}"));
+                        cx.notify();
+                    }))
+                    .child(btn("kb+", "+", false, cx, move |v, _, _, cx| {
+                        let max = v.kbd_max();
+                        let cur = v.data.kbd_brightness.unwrap_or(0);
+                        let mut rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        if rgb == (0, 0, 0) {
+                            rgb = (255, 255, 255);
+                        }
+                        let b = cur.saturating_add((max / 10).max(1)).min(max);
+                        v.kbd_apply(cx, b, rgb, format!("kbd brightness → {b}"));
+                        cx.notify();
+                    }))
+                    .child(btn("kb-max", "Max", false, cx, move |v, _, _, cx| {
+                        let max = v.kbd_max();
+                        let mut rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        if rgb == (0, 0, 0) {
+                            rgb = (255, 255, 255);
+                        }
+                        v.kbd_apply(cx, max, rgb, format!("kbd brightness → {max}"));
+                        cx.notify();
+                    }))
+                    .child(btn("kb-off", "Off", false, cx, move |v, _, _, cx| {
+                        let rgb = v.data.kbd_rgb.unwrap_or((255, 255, 255));
+                        v.kbd_apply(cx, 0, rgb, "kbd off".to_string());
+                        cx.notify();
+                    })),
+            ],
+        )
+    }
+
+    fn kbd_color_card(&mut self, cx: &mut Context<Self>) -> Div {
+        const PRESETS: [(&str, (u8, u8, u8), u32); 7] = [
+            ("red", (255, 0, 0), 0xFF0000),
+            ("yellow", (255, 255, 0), 0xFFFF00),
+            ("green", (0, 255, 0), 0x00FF00),
+            ("cyan", (0, 255, 255), 0x00FFFF),
+            ("blue", (0, 0, 255), 0x0000FF),
+            ("white", (255, 255, 255), 0xFFFFFF),
+            ("off", (0, 0, 0), 0x000000),
+        ];
+        let cur_rgb = self.data.kbd_rgb;
+        let mut tiles: Vec<Stateful<Div>> = Vec::new();
+        for (name, col, hex) in PRESETS {
+            let sel = cur_rgb == Some(col);
+            let label = name.to_string();
+            let dot = if name == "off" {
+                div()
+                    .w(px(16.))
+                    .h(px(16.))
+                    .rounded_sm()
+                    .bg(rgb(0x000000))
+                    .border_1()
+                    .border_color(rgb(BORDER))
+            } else {
+                div().w(px(16.)).h(px(16.)).rounded_sm().bg(rgb(hex))
+            };
+            tiles.push(
+                div()
+                    .id(SharedString::from(format!("kbd-{name}")))
+                    .flex_1()
+                    .min_w(px(96.))
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(rgb(PANEL2))
+                    .border_1()
+                    .border_color(rgb(if sel { WHITE } else { BORDER }))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(rgb(lighten(PANEL2, 0.2))))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .child(dot)
+                            .child(
+                                div()
+                                    .text_color(rgb(if sel { WHITE } else { TEXT }))
+                                    .text_sm()
+                                    .whitespace_nowrap()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(format!("{}{}", if sel { "● " } else { "" }, label)),
+                            ),
+                    )
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        let max = v.kbd_max();
+                        let b = if label == "off" {
+                            0
+                        } else {
+                            match v.data.kbd_brightness {
+                                Some(0) | None => max,
+                                Some(b) => b,
+                            }
+                        };
+                        v.kbd_apply(cx, b, col, format!("kbd {label}"));
+                        cx.notify();
+                    })),
+            );
+        }
+        card(
+            "WARNA",
+            [
+                div().flex().flex_row().flex_wrap().gap_2().w_full().children(tiles),
+                div().text_color(rgb(FAINT)).text_xs().child(
+                    "klik warna = tulis ke semua zona (brightness 0 → otomatis full)".to_string(),
+                ),
+            ],
+        )
+    }
 }
 
 impl Render for RootView {
@@ -1710,6 +1993,44 @@ impl Render for RootView {
                         } else {
                             div().flex_1()
                         }),
+                ),
+            Tab::Keyboard => div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .w_full()
+                .child(div().w_full().child(self.kbd_visual_card()))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap_2()
+                        .w_full()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.kbd_status_card()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.kbd_bright_card(cx)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .child(self.kbd_color_card(cx)),
                 ),
             Tab::Daya => div()
                 .flex()
@@ -2152,6 +2473,23 @@ fn sample(s: &mut Sampler) -> SensorData {
         }
     };
 
+    let kbds = kbd::discover();
+    let mut kbd_zones: Vec<(u32, (u8, u8, u8))> = Vec::new();
+    for kb in &kbds {
+        if let Some(s) = kbd::read_state(kb) {
+            kbd_zones.push((s.brightness, s.rgb));
+        }
+    }
+    let (kbd_nodes, kbd_max, kbd_brightness, kbd_rgb) = match kbds.first() {
+        Some(kb) => (
+            kbds.len(),
+            kb.max_brightness,
+            kbd::read_state(kb).map(|s| s.brightness),
+            kbd::read_state(kb).map(|s| s.rgb),
+        ),
+        None => (0, 0, None, None),
+    };
+
     SensorData {
         cpu_temp_line,
         cpu_freq_line,
@@ -2168,12 +2506,52 @@ fn sample(s: &mut Sampler) -> SensorData {
         ec,
         ec_err,
         max_temp_c,
+        kbd_nodes,
+        kbd_max,
+        kbd_brightness,
+        kbd_rgb,
+        kbd_zones,
         stamp: format!("live · update #{}", s.n),
+    }
+}
+
+/// App harus jalan sebagai root: kalau euid != 0, relaunch diri via
+/// pkexec (prompt sekali di awal), lalu proses ini menunggu sampai GUI
+/// root ditutup. Env Wayland diteruskan agar window bisa dibuka.
+/// Batal/gagal → lanjut tanpa root (tulis EC pakai fallback per-aksi).
+/// Bypass (dev): `AXIOO_ALLOW_USER=1`.
+fn ensure_root_or_relaunch() {
+    if fan_ctrl::is_root() || std::env::var("AXIOO_ALLOW_USER").is_ok() {
+        return;
+    }
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut cmd = std::process::Command::new("pkexec");
+    cmd.arg("env");
+    for key in ["WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DISPLAY"] {
+        if let Ok(val) = std::env::var(key) {
+            cmd.arg(format!("{key}={val}"));
+        }
+    }
+    cmd.arg(&exe);
+    cmd.args(&args);
+    match cmd.status() {
+        Ok(st) if st.success() => std::process::exit(0),
+        Ok(st) => eprintln!(
+            "axioo-control-center: pkexec dibatalkan/gagal ({st}); lanjut tanpa root."
+        ),
+        Err(e) => eprintln!(
+            "axio-control-center: pkexec tak bisa dijalankan ({e}); lanjut tanpa root."
+        ),
     }
 }
 
 fn main() {
     eprintln!("axioo-control-center: starting (GUI)…");
+    ensure_root_or_relaunch();
     Application::new().run(|app: &mut App| {
         let product = dmi::read_dmi()
             .get("product_name")
@@ -2266,4 +2644,31 @@ fn main() {
         .detach();
     });
     eprintln!("axioo-control-center: exited (semua window ditutup).");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glow_scales_rgb() {
+        assert_eq!(glow((255, 0, 0), 1.0), 0xFF0000);
+        assert_eq!(glow((255, 255, 255), 0.0), 0x000000);
+        assert_eq!(glow((0, 255, 0), 0.5), 0x008000);
+    }
+
+    #[test]
+    fn chart_xy_roundtrip() {
+        let (t, d) = chart_xy_to_data(100.0, 80.0, 400.0, 190.0);
+        let (x, y) = chart_data_to_xy(t, d, 400.0, 190.0);
+        assert!((x - 100.0).abs() < 3.0 && (y - 80.0).abs() < 3.0);
+    }
+
+    #[test]
+    fn chart_duty_interpolates() {
+        let pts = vec![(20, 40), (60, 80)];
+        assert_eq!(chart_duty_at(&pts, 20), 40);
+        assert_eq!(chart_duty_at(&pts, 40), 60);
+        assert_eq!(chart_duty_at(&pts, 100), 80);
+    }
 }

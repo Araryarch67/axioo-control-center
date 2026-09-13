@@ -1,0 +1,25 @@
+--- /tmp/clevo_leds.h.orig	2026-09-13 18:27:30.860978565 +0700
++++ /tmp/new.h	2026-09-13 18:41:35.744835043 +0700
+@@ -363,6 +363,22 @@
+ 	}
+ 	pr_debug("Keyboard backlight type: 0x%02x\n", clevo_kb_backlight_type);
+ 
++	// Axioo Pongo Studio X (2025): GET_SPECS reports backlight type 0x17,
++	// unknown to the driver, so no LED would be registered at all.
++	// Proven 3-zone on hardware (zone-0-only writes light the left
++	// section), so force 3-zone RGB to expose all zones.
++	// Only unknown types are touched — known types pass through.
++	if (dmi_string_in(DMI_BOARD_NAME, "Pongo Studio X") &&
++	    clevo_kb_backlight_type != CLEVO_KB_BACKLIGHT_TYPE_NONE &&
++	    clevo_kb_backlight_type != CLEVO_KB_BACKLIGHT_TYPE_FIXED_COLOR &&
++	    clevo_kb_backlight_type != CLEVO_KB_BACKLIGHT_TYPE_3_ZONE_RGB &&
++	    clevo_kb_backlight_type != CLEVO_KB_BACKLIGHT_TYPE_1_ZONE_RGB &&
++	    clevo_kb_backlight_type != CLEVO_KB_BACKLIGHT_TYPE_PER_KEY_RGB) {
++		pr_notice("Pongo Studio X: unknown backlight type 0x%02x, forcing 3-zone RGB\n",
++			  clevo_kb_backlight_type);
++		clevo_kb_backlight_type = CLEVO_KB_BACKLIGHT_TYPE_3_ZONE_RGB;
++	}
++
+ 	// detection of N14xWUs white keyboard backlight with five steps fails
+ 	// old DMI strings may have trailing spaces (dmi_string_in for substring match)
+ 	if (dmi_string_in(DMI_BOARD_NAME, "N14xWU") ||

@@ -110,3 +110,39 @@ pub fn set(brightness: Option<u32>, rgb: Option<String>, preset: Option<String>,
         std::process::exit(3);
     }
 }
+
+/// `axioo-ctl kbd brighter|dimmer`: geser brightness relatif ±1 langkah
+/// (langkah = max/10, min 1). Untuk bind Fn-keys di compositor
+/// (butuh node LED + root, sama seperti `set`).
+pub fn brighter() {
+    nudge(1);
+}
+
+pub fn dimmer() {
+    nudge(-1);
+}
+
+fn nudge(dir: i32) {
+    let devs = kbd::discover();
+    if devs.is_empty() {
+        eprintln!("error: no keyboard-backlight LED found (see: axioo-ctl kbd status)");
+        std::process::exit(1);
+    }
+    let mut failed = false;
+    for d in &devs {
+        let cur = kbd::read_state(d).map(|s| s.brightness).unwrap_or(0);
+        let rgb = kbd::read_state(d).map(|s| s.rgb).unwrap_or((255, 255, 255));
+        let step = (d.max_brightness / 10).max(1) as i32;
+        let next = (cur as i32 + dir * step).clamp(0, d.max_brightness as i32) as u32;
+        match kbd::set(d, next, rgb) {
+            Ok(()) => println!("{} <- brightness={next}", d.name),
+            Err(e) => {
+                eprintln!("error: {e}");
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        std::process::exit(3);
+    }
+}

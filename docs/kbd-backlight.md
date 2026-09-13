@@ -19,7 +19,7 @@ brightness      -> /sys/.../rgb:kbd_backlight/brightness
 | `multi_intensity` selalu `"R G B"` | urutan mengikuti `multi_index` device (`map_channels`), channel tak dikenal → 0 |
 | preset RED/YELLOW/GREEN/CYAN/BLUE/WHITE/OFF | `kbd::preset()` — set identik |
 | `pkexec` fallback saat write gagal | error message eksplisit: bedakan *driver tidak ada* vs *perlu root* |
-| GUI GTK | belum di-port (GUI kita GPUI; panel keyboard menyusul setelah tulis terbukti aman) |
+| GUI GTK | panel Keyboard di GUI (tab 02 CONTROL): status zona, brightness stepper, preset warna, visualizer per-zona — tulis langsung (root) |
 
 ## Penyesuaian khusus Pongo Studio X (2025, X560WNR-SU9)
 
@@ -36,13 +36,13 @@ brightness      -> /sys/.../rgb:kbd_backlight/brightness
    Terbukti di Pongo Studio X (2025, X560WNR-SU9): `CLEVO_CMD_GET_SPECS`
    menjawab tipe **`0x17`** (tidak ada di tabel `0x01/0x02/0x06/0xf3`),
    sehingga `clevo_leds_init()` tidak mendaftarkan LED sama sekali.
-   Solusinya quirk DMI: paksa tipe tak dikenal menjadi 1-zone RGB
-   (EC mesin ini menjawab perintah RGB standar). Prosedur:
-   patch `/usr/src/clevo-drivers-4.20.1/clevo_leds.h` (sisipkan quirk
-   setelah quirk N14xWU), lalu
-   `sudo dkms remove clevo-drivers/4.20.1 --all &&
-    sudo dkms install clevo-drivers/4.20.1`,
-   reload modul, verifikasi node LED muncul. Quirk hanya aktif untuk
+   Solusinya quirk DMI: paksa tipe tak dikenal menjadi **3-zone RGB**
+   (terbukti di hardware: tulis 1-zone hanya menyalakan seksi kiri,
+   sisanya zona lain — jadi butuh semua 3 zona terekspos).
+   Prosedur: jalankan `sudo ./install.sh` di
+   `packaging/clevo-drivers-axioo/` (menyalin tree AUR, menerapkan
+   `studiox-kbd-quirk.patch`, DKMS build sebagai
+   `tuxedo-drivers-axioo/4.20.1`, reload modul). Quirk hanya aktif untuk
    board `Pongo Studio X` dan hanya untuk tipe yang tidak dikenal —
    tipe yang sudah dikenal tidak disentuh.
 3. **Tulis butuh root** (`sudo axioo-ctl kbd set ...`) sampai daemon

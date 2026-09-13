@@ -3,21 +3,45 @@
 Utilitas kontrol hardware untuk laptop **Axioo** (basis Clevo) di Linux —
 pengganti Clevo Control Center versi Windows, ditulis ulang dari nol dalam Rust.
 
-> Status: MVP read-only. Semua perintah saat ini **hanya membaca** hardware,
-> tidak ada yang menulis ke EC / sysfs. Kontrol tulis (kipas, keyboard,
-> power limit) menyusul setelah validasi protokol per model.
+> Status: kontrol one-shot jalan — kipas (`fan set|auto`, root, clamp
+> 40–100%, kedua fan, verify `0xCE`) dan backlight keyboard
+> (`kbd set`, 3 zona di Studio X). GUI menulis langsung sebagai root
+> (relaunch via `pkexec` sekali di awal). Loop kurva kontinu milik
+> `axiood` di masa depan (belum ada).
+
+## Prasyarat driver (wajib buat Pongo)
+
+```sh
+yay -S clevo-drivers-dkms-git
+```
+
+**Pongo Studio X (2025)**: firmware melaporkan tipe backlight `0x17`
+yang tidak dikenal driver, sehingga LED keyboard tidak muncul sama
+sekali. Pasang quirk dulu:
+
+```sh
+cd packaging/clevo-drivers-axioo && sudo ./install.sh
+ls /sys/class/leds/ | grep kbd   # harus muncul rgb:kbd_backlight{,_1,_2}
+```
+
+Detail: `docs/kbd-backlight.md`. Tanpa ini, semua perintah `kbd`
+menolak dengan "no keyboard-backlight LED found".
 
 ## Struktur workspace
 
 ```
 axioo-control-center/
-├── axioo-lib/     # library introspeksi read-only (DMI, hwmon, RAPL,
-│                  #   NVIDIA, baterai, LED, ACPI/WMI, EC) + konstanta
-│                  #   protokol EC fan (tanpa I/O) + kontrol backlight
-│                  #   keyboard via LED class (`kbd` module)
-├── axioo-ctl/     # CLI: `axioo-ctl probe`, `axioo-ctl monitor`,
-│                  #   `axioo-ctl kbd status|get|set`
-├── axioo-gui/     # GUI desktop (GPUI, framework-nya Zed) — window shell
+├── axioo-lib/     # library introspeksi (DMI, hwmon, RAPL, NVIDIA,
+│                  #   baterai, LED, ACPI/WMI, EC) + protokol EC fan +
+│                  #   kontrol backlight keyboard (`kbd`) + tulis EC
+│                  #   one-shot (`fan_ctrl`, root-only)
+├── axioo-ctl/     # CLI: `probe`, `monitor`, `fan dump|watch|curve|set|auto`,
+│                  #   `kbd status|get|set|brighter|dimmer`
+├── axioo-gui/     # GUI desktop (GPUI): Dashboard, Performa, Kipas,
+│                  #   Keyboard (status/brightness/preset/visualizer), Daya
+├── packaging/
+│   └── clevo-drivers-axioo/  # quirk DKMS 0x17 → 3-zone buat Studio X
+│                             # (patch + dkms.conf + install.sh)
 └── docs/
     ├── ec-fan-protocol.md   # protokol EC fan Clevo (referensi fase kontrol)
     └── kbd-backlight.md     # port backlight keyboard + penyesuaian Studio X
@@ -30,9 +54,11 @@ cargo build
 ./target/debug/axioo-ctl probe            # dump kapabilitas hardware
 ./target/debug/axioo-ctl monitor          # dashboard live (Ctrl-C keluar)
 ./target/debug/axioo-ctl monitor -i 2 -c 5
+./target/debug/axioo-ctl fan dump         # butuh sudo + ec_sys (peta EC fan)
 ./target/debug/axioo-ctl kbd status       # cek driver/LED backlight keyboard
 ./target/debug/axioo-ctl kbd set --preset blue --dry-run
-sudo ./target/debug/axioo-ctl kbd set --preset blue --brightness 200
+sudo ./target/debug/axioo-ctl kbd set --preset blue --brightness 255
+./target/debug/axioo-control-center       # GUI (relaunch root via pkexec)
 cargo test -p axioo-lib                   # unit test konversi protokol EC + kbd
 ```
 
