@@ -147,6 +147,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tick = tokio::time::interval(interval);
     let mut ppd_tick = tokio::time::interval(Duration::from_secs(3));
     ppd_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // `true` = tick sebelumnya sudah menyerahkan kipas ke firmware
+    // (set_auto satu-kali). Mencegah set_auto berulang tiap tick.
+    let mut ec_auto_applied = false;
 
     loop {
         tokio::select! {
@@ -174,26 +177,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                // 2. Fan tick: EC-auto step (+hysteresis), quiet = pin 40.
+                // 2. Fan tick: tiga mode milik daemon (tak pernah dari klien langsung).
+                //    - ec_auto : set_auto() SATU-KALI, lalu diam (firmware pegang).
+                //    - manual  : kunci duty pilihan user.
+                //    - curve   : EC-auto step (+hysteresis), quiet = pin 40.
                 if !no_fan {
-                    if let Some(temp) = current_temp_c() {
-                        let last = state.read().await.last_duty;
-                        let duty = profile.step_duty(quiet, temp, last);
-                        if duty != last {
-                            match fan_ctrl::set_manual_duty(duty) {
-                                Ok(rep) => {
-                                    state.write().await.last_duty = duty;
-                                    let tag = if quiet { "quiet" } else { "normal" };
-                                    println!(
-                                        "axiood: {} [{tag}] {temp}C -> {duty}% (verify {:?})",
-                                        profile.as_str(), rep.verified_pct
-                                    );
+                    let (ec_auto, manual) = {
+                        let st = state.read().await;
+                        (st.fan_ec_auto, st.fan_manual)
+                    };
+                    if ec_auto {
+                        if !ec_auto_applied {
+                            match fan_ctrl::set_auto() {
+                                Ok(()) => {
+                                    println!("axiood: fan -> EC auto (firmware pegang)");
+                                    state.write().await.last_duty = 0;
                                 }
-                                Err(e) => eprintln!("axiood: tulis EC gagal ({e})"),
+                                Err(e) => eprintln!("axiood: set EC auto gagal ({e})"),
                             }
+                            ec_auto_applied = true;
                         }
                     } else {
-                        eprintln!("axiood: suhu tak terbaca (EC + coretemp gagal)");
+                        ec_auto_applied = false;
+                        if let Some(temp) = current_temp_c() {
+                            let last = state.read().await.last_duty;
+                            let duty = match manual {
+                                Some(d) => d,
+                                None => profile.step_duty(quiet, temp, last),
+                            };
+                            if duty != last {
+                                match fan_ctrl::set_manual_duty(duty) {
+                                    Ok(rep) => {
+                                        state.write().await.last_duty = duty;
+                                        let tag = if manual.is_some() {
+                                            "manual"
+                                        } else if quiet {
+                                            "quiet"
+                                        } else {
+                                            "normal"
+                                        };
+                                        println!(
+                                            "axiood: {} [{tag}] {temp}C -> {duty}% (verify {:?})",
+                                            profile.as_str(), rep.verified_pct
+                                        );
+                                    }
+                                    Err(e) => eprintln!("axiood: tulis EC gagal ({e})"),
+                                }
+                            }
+                        } else {
+                            eprintln!("axiood: suhu tak terbaca (EC + coretemp gagal)");
+                        }
                     }
                 }
             }

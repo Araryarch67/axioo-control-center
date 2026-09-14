@@ -10,6 +10,25 @@ brightness      -> /sys/.../rgb:kbd_backlight/brightness
 "R G B"         -> /sys/.../rgb:kbd_backlight/multi_intensity
 ```
 
+## Lightbar belakang (eksperimen, belum terbukti)
+
+Lampu exhaust belakang TIDAK muncul sebagai LED tersendiri
+(`ls /sys/class/leds` hanya 4 zona keyboard). Dua kemungkinan:
+
+1. **Mirror zona keyboard** (khas Clevo) — test 30 detik: set tiap zona
+   warna beda di GUI (Z1 merah, Z2 hijau, Z3 biru, Z4 putih), lihat
+   belakang ikut zona mana. Tanpa ubah kode.
+2. **EC indeks `0x07` via ECMD** — `packaging/clevo-drivers-axioo/`
+   `studiox-lightbar-ec.patch` mendaftarkan LED ke-5
+   (`rgb:kbd_backlight_4`) yang menulis `05 00 CA 07 RR GG BB`,
+   pola sama seperti numpad (`0x0B`). Terpasang otomatis oleh
+   `install.sh` (urutan: quirk → 4th-zone → getspecs-debug →
+   numpad-ec → lightbar-ec; urutan apply dari pristine terverifikasi).
+   Setelah rebuild + reload: `ls /sys/class/leds | grep kbd` harus
+   menunjukkan node ke-5; tulis warna lalu lihat belakang.
+   Kalau indeks `0x07` tak berpengaruh, lightbar ikut firmware
+   (mirror) — pakai hasil test (1) dan beri label di UI.
+
 ## Pemetaan Python → Rust
 
 | Python (`main.py`) | Rust (`axioo-lib::kbd` + `axioo-ctl kbd`) |

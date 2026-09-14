@@ -1,0 +1,224 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============ NEOBRUTALISM GAMING ============
+   Thick borders, hard offset shadows (zero blur), loud amber accent,
+   extra-bold uppercase type. Iosevka mono for numbers only. */
+:root,
+[data-theme="ryoku"] {
+  --bg: 16 13 10;
+  --bg2: 22 18 13;
+  --card: 26 21 15;
+  --card2: 34 27 18;
+  --line: 0 0 0;
+  --border: 74 62 44;
+  --hair: 44 37 27;
+  --ink: 240 233 218;
+  --cream: 247 240 226;
+  --dim: 178 168 146;
+  --faint: 128 119 102;
+  --ghost: 70 62 48;
+  --accent: 255 107 0;
+  --accent-ink: 24 12 0;
+  --lime: 198 242 78;
+  --ok: 134 220 120;
+  --bad: 255 77 94;
+}
+[data-theme="gruvbox"] {
+  --bg: 30 30 30; --bg2: 38 38 38; --card: 46 44 42; --card2: 58 54 50;
+  --line: 0 0 0; --border: 110 96 78; --hair: 70 62 50;
+  --ink: 235 219 178; --cream: 251 241 199;
+  --dim: 200 182 148; --faint: 150 136 112; --ghost: 96 84 66;
+  --accent: 254 128 25; --accent-ink: 30 14 0;
+  --lime: 184 187 38;
+  --ok: 152 180 100; --bad: 235 90 80;
+}
+[data-theme="dracula"] {
+  --bg: 24 26 38; --bg2: 30 32 46; --card: 38 40 58; --card2: 50 53 74;
+  --line: 0 0 0; --border: 104 110 155; --hair: 70 74 108;
+  --ink: 242 242 238; --cream: 255 255 255;
+  --dim: 198 190 220; --faint: 140 142 175; --ghost: 80 82 112;
+  --accent: 255 121 198; --accent-ink: 40 8 28;
+  --lime: 128 247 163;
+  --ok: 100 220 140; --bad: 250 100 115;
+}
+[data-theme="nord"] {
+  --bg: 36 42 54; --bg2: 40 46 58; --card: 48 55 68; --card2: 58 65 80;
+  --line: 0 0 0; --border: 100 110 132; --hair: 72 80 104;
+  --ink: 232 236 242; --cream: 244 247 251;
+  --dim: 200 208 222; --faint: 140 150 170; --ghost: 84 94 116;
+  --accent: 255 170 60; --accent-ink: 34 22 6;
+  --lime: 163 190 140;
+  --ok: 150 195 145; --bad: 215 120 125;
+}
+[data-theme="tokyo"] {
+  --bg: 20 21 31; --bg2: 23 24 35; --card: 30 32 46; --card2: 40 43 60;
+  --line: 0 0 0; --border: 84 92 128; --hair: 60 66 96;
+  --ink: 202 210 250; --cream: 230 234 252;
+  --dim: 170 180 214; --faint: 120 128 166; --ghost: 72 78 112;
+  --accent: 255 150 50; --accent-ink: 34 20 4;
+  --lime: 158 206 106;
+  --ok: 140 210 130; --bad: 247 115 140;
+}
+[data-theme="catppuccin"] {
+  --bg: 22 22 36; --bg2: 26 26 42; --card: 34 35 52; --card2: 47 48 66;
+  --line: 0 0 0; --border: 106 110 134; --hair: 76 78 100;
+  --ink: 210 218 246; --cream: 228 232 248;
+  --dim: 180 187 208; --faint: 128 132 158; --ghost: 86 88 112;
+  --accent: 250 179 135; --accent-ink: 38 22 10;
+  --lime: 166 227 161;
+  --ok: 150 215 150; --bad: 242 128 152;
+}
+
+html, body, #root { height: 100%; }
+body {
+  @apply antialiased;
+  font-family: "Iosevka Nerd Font", "Iosevka Nerd Font Mono", monospace;
+  color: rgb(var(--ink));
+  background-color: rgb(var(--bg));
+  overscroll-behavior: none;
+  user-select: none;
+}
+/* Blueprint grid — dipakai HANYA di area konten utama, bukan chrome. */
+.bg-grid {
+  background-color: rgb(var(--bg));
+  background-image:
+    linear-gradient(rgb(var(--ghost) / 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--ghost) / 0.35) 1px, transparent 1px),
+    radial-gradient(rgb(var(--ghost) / 0.5) 1px, transparent 1px);
+  background-size: 44px 44px, 44px 44px, 22px 22px;
+}
+input, textarea { user-select: text; }
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--ghost)) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgb(var(--ghost)); border-radius: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+@layer components {
+  .card {
+    background: rgb(var(--card));
+    border: 2px solid rgb(var(--line));
+    border-radius: 8px;
+    box-shadow: 8px 8px 0 rgb(var(--line));
+  }
+  .card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 800;
+    font-style: italic;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgb(var(--ink));
+  }
+  .card-title > svg { color: rgb(var(--accent)); }
+  .num { font-family: "Iosevka Nerd Font Mono", "Iosevka Nerd Font", monospace; font-variant-numeric: tabular-nums; }
+  /* Satuan setelah angka: jarak lega + tegak (tidak italic) biar tak nempel. */
+  .unit { margin-left: 0.24em; font-style: normal; font-weight: 400; }
+  .cbtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 800;
+    font-style: italic;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 10px 16px;
+    border: 2px solid rgb(var(--line));
+    background: rgb(var(--card2));
+    color: rgb(var(--ink));
+    cursor: pointer;
+    box-shadow: 4px 4px 0 rgb(var(--line));
+    transition: transform 70ms, box-shadow 70ms, filter 120ms;
+  }
+  .cbtn:hover { filter: brightness(1.18); }
+  .cbtn:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 rgb(var(--line)); }
+  .cbtn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .cbtn-accent { background: rgb(var(--accent)); border-color: rgb(var(--line)); color: rgb(var(--accent-ink)); }
+  .cbtn-danger { border-color: rgb(var(--line)); color: rgb(var(--bad)); }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 2px solid rgb(var(--line));
+    background: rgb(var(--bg2));
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: rgb(var(--dim));
+    white-space: nowrap;
+    box-shadow: 2px 2px 0 rgb(var(--line));
+  }
+  .cdot { width: 8px; height: 8px; border-radius: 9999px; background: rgb(var(--ghost)); flex-shrink: 0; border: 1px solid rgb(var(--line)); }
+  .field {
+    width: 100%;
+    background: rgb(var(--bg));
+    border: 2px solid rgb(var(--line));
+    border-radius: 6px;
+    padding: 9px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgb(var(--cream));
+    outline: none;
+  }
+  .field::placeholder { color: rgb(var(--faint)); font-weight: 400; }
+  .field:focus { border-color: rgb(var(--accent)); box-shadow: 3px 3px 0 rgb(var(--line)); }
+  input[type="range"].ck {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 26px; background: transparent; cursor: pointer;
+  }
+  input[type="range"].ck::-webkit-slider-runnable-track {
+    height: 10px; border-radius: 6px;
+    border: 2px solid rgb(var(--line));
+    background: linear-gradient(90deg, rgb(var(--accent)) var(--fill, 50%), rgb(var(--bg)) var(--fill, 50%));
+  }
+  input[type="range"].ck::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 22px; height: 22px; margin-top: -8px;
+    border-radius: 4px; background: rgb(var(--cream));
+    border: 2px solid rgb(var(--line));
+    box-shadow: 2px 2px 0 rgb(var(--line));
+  }
+  input[type="range"].ck::-moz-range-track {
+    height: 10px; border-radius: 6px;
+    border: 2px solid rgb(var(--line)); background: rgb(var(--bg));
+  }
+  input[type="range"].ck::-moz-range-progress { height: 6px; border-radius: 4px; background: rgb(var(--accent)); }
+  input[type="range"].ck::-moz-range-thumb {
+    width: 18px; height: 18px; border-radius: 4px;
+    background: rgb(var(--cream)); border: 2px solid rgb(var(--line));
+  }
+  input[type="range"].ck:disabled { opacity: 0.35; }
+  .railbtn {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    padding: 10px 0 8px;
+    border-radius: 8px;
+    color: rgb(var(--faint));
+    cursor: pointer;
+    border: 2px solid transparent;
+    background: transparent;
+    font-size: 9.5px;
+    font-weight: 800;
+    font-style: italic;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    transition: all 120ms;
+  }
+  .railbtn:hover { color: rgb(var(--ink)); background: rgb(var(--card)); }
+  .railbtn[data-active="true"] {
+    color: rgb(var(--accent-ink));
+    background: rgb(var(--accent));
+    border-color: rgb(var(--line));
+    box-shadow: 3px 3px 0 rgb(var(--line));
+  }
+}

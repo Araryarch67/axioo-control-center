@@ -32,6 +32,7 @@ patch "$DST/clevo_leds.h" < "$HERE/studiox-kbd-quirk.patch"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-4th-zone.patch"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-getspecs-debug.patch"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-numpad-ec.patch"
+patch "$DST/clevo_leds.h" < "$HERE/studiox-lightbar-ec.patch"
 cp "$HERE/dkms.conf" "$DST/dkms.conf"
 echo "patched: $DST/clevo_leds.h"
 

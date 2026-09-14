@@ -236,7 +236,7 @@ pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>) {
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
     ctrlc_handler(s);
-    axioo_lib::kbd_effect::run_blocking(eff, base, brightness, stop);
+    axioo_lib::kbd_effect::run_blocking(eff, base, brightness, 1.0, stop);
 }
 
 fn ctrlc_handler(stop: Arc<AtomicBool>) {

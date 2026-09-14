@@ -53,8 +53,15 @@ impl AxiooControl {
     /// Effective fan curve `(temp_c, duty_pct)` incl. quiet toggle.
     /// Single source of truth buat chart GUI — jangan duplikasi tabel
     /// kurva di klien, baca dari sini.
+    /// Kosong bila `ec_auto` (firmware yang pegang); garis datar bila manual.
     async fn get_curve(&self) -> Vec<(i32, u8)> {
         let st = self.state.read().await;
+        if st.fan_ec_auto {
+            return Vec::new();
+        }
+        if let Some(d) = st.fan_manual {
+            return vec![(20, d), (100, d)];
+        }
         st.profile.effective_curve(st.quiet_fan)
     }
 
@@ -67,6 +74,47 @@ impl AxiooControl {
     async fn set_quiet_fan(&self, quiet: bool) -> String {
         let mut st = self.state.write().await;
         st.quiet_fan = quiet;
+        st.pending_apply = true;
+        st.label()
+    }
+
+    /// Current fan mode: "curve" | "manual" | "ec_auto".
+    async fn get_fan_mode(&self) -> String {
+        self.state.read().await.fan_mode().to_string()
+    }
+
+    /// Kembalikan kipas ke firmware EC auto. Loop berhenti menulis duty
+    /// (satu-kali `set_auto()` di tick berikut); RAPL/PPD tetap ikut profil.
+    async fn set_fan_ec_auto(&self, auto: bool) -> String {
+        let mut st = self.state.write().await;
+        st.fan_ec_auto = auto;
+        if auto {
+            st.fan_manual = None;
+        }
+        st.pending_apply = true;
+        st.label()
+    }
+
+    /// Kunci duty manual via loop daemon (clamp 40–100% di sini —
+    /// klien JS untrusted). Mengalahkan kurva DAN ec_auto (ec_auto
+    /// otomatis dimatikan agar UI tak perlu urutan panggilan khusus).
+    /// Tulis EC-nya tetap di main loop, bukan di sini.
+    async fn set_fan_manual(&self, duty: u8) -> String {
+        let want = duty.clamp(
+            axioo_lib::fan::MIN_FAN_DUTY_PCT,
+            axioo_lib::fan::MAX_FAN_DUTY_PCT,
+        );
+        let mut st = self.state.write().await;
+        st.fan_ec_auto = false;
+        st.fan_manual = Some(want);
+        st.pending_apply = true;
+        st.label()
+    }
+
+    /// Kembali ke kurva daemon (hapus override manual).
+    async fn clear_fan_override(&self) -> String {
+        let mut st = self.state.write().await;
+        st.fan_manual = None;
         st.pending_apply = true;
         st.label()
     }

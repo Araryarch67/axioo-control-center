@@ -283,13 +283,21 @@ pub fn tick(effect: &KbdEffect, base: (u8, u8, u8), t: f32, nzones: usize) -> Ve
     }
 }
 
-/// Blokir thread sampai `stop` true.
-pub fn run_blocking(effect: KbdEffect, base: (u8, u8, u8), brightness: u32, stop: Arc<AtomicBool>) {
+/// Blokir thread sampai `stop` true. `speed` pengali laju animasi
+/// (1.0 = normal, 2.0 = 2x lebih cepat); di-clamp 0.1..=4.0.
+pub fn run_blocking(
+    effect: KbdEffect,
+    base: (u8, u8, u8),
+    brightness: u32,
+    speed: f32,
+    stop: Arc<AtomicBool>,
+) {
     let devs = kbd::discover();
     if devs.is_empty() {
         return;
     }
     let nz = devs.len();
+    let sp = speed.clamp(0.1, 4.0);
     let mut t = 0.0f32;
     let dt = 0.06;
     while !stop.load(Ordering::Relaxed) {
@@ -298,17 +306,22 @@ pub fn run_blocking(effect: KbdEffect, base: (u8, u8, u8), brightness: u32, stop
             let _ = kbd::set(d, brightness, *rgb);
         }
         thread::sleep(Duration::from_millis(60));
-        t += dt;
+        t += dt * sp;
     }
     for d in &devs {
         let _ = kbd::set(d, brightness, base);
     }
 }
 
-pub fn spawn(effect: KbdEffect, base: (u8, u8, u8), brightness: u32) -> Arc<AtomicBool> {
+pub fn spawn(
+    effect: KbdEffect,
+    base: (u8, u8, u8),
+    brightness: u32,
+    speed: f32,
+) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
-    thread::spawn(move || run_blocking(effect, base, brightness, s));
+    thread::spawn(move || run_blocking(effect, base, brightness, speed, s));
     stop
 }
 

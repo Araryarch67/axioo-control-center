@@ -1,0 +1,723 @@
+//! axioo-center — Tauri 2 backend (thin client).
+//!
+//! SAFETY CONTRACT (same as GPUI GUI + AGENTS.md):
+//! - Read-only sensors via `axioo-lib` (no root needed).
+//! - Privileged writes: ONLY one-shot `fan_ctrl::{set_manual_duty,set_auto}`
+//!   (root-only, clamp 40–100%, both fans, verify `0xCE`) and `kbd::set`
+//!   (sysfs LED, safe) and `battery::set_charge_thresholds` (validated).
+//! - The continuous curve loop belongs to `axiood`, NEVER here.
+//! - Server-side guard: when `axiood` is reachable on the system bus,
+//!   direct EC writes are REJECTED (daemon owns the curve).
+//! - All numeric inputs are re-validated here; the JS slider is untrusted.
+
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::Instant;
+
+use axioo_lib::{battery, cpu, dmi, ec, fan, fan_ctrl, hwmon, kbd, kbd_effect, memory, nvidia, rapl};
+use serde::Serialize;
+
+// ---------- D-Bus proxies (async, same bus as axiood) ----------
+
+#[zbus::proxy(
+    interface = "com.axioo.Control",
+    default_service = "com.axioo.Control",
+    default_path = "/com/axioo/Control"
+)]
+trait AxiooControl {
+    async fn get_profile(&self) -> zbus::Result<String>;
+    async fn set_profile(&self, profile: &str) -> zbus::Result<String>;
+    async fn get_ppd_profile(&self) -> zbus::Result<String>;
+    async fn get_quiet_fan(&self) -> zbus::Result<bool>;
+    async fn set_quiet_fan(&self, quiet: bool) -> zbus::Result<String>;
+    async fn get_fan_duty(&self) -> zbus::Result<u8>;
+    async fn get_curve(&self) -> zbus::Result<Vec<(i32, u8)>>;
+    async fn get_fan_mode(&self) -> zbus::Result<String>;
+    async fn set_fan_ec_auto(&self, auto: bool) -> zbus::Result<String>;
+    async fn set_fan_manual(&self, duty: u8) -> zbus::Result<String>;
+    async fn clear_fan_override(&self) -> zbus::Result<String>;
+}
+
+#[zbus::proxy(
+    interface = "org.freedesktop.UPower.PowerProfiles",
+    default_path = "/org/freedesktop/UPower/PowerProfiles"
+)]
+trait PpdNew {
+    #[zbus(property)]
+    fn active_profile(&self) -> zbus::Result<String>;
+}
+
+#[zbus::proxy(
+    interface = "net.hadess.PowerProfiles",
+    default_path = "/net/hadess/PowerProfiles"
+)]
+trait PpdOld {
+    #[zbus(property)]
+    fn active_profile(&self) -> zbus::Result<String>;
+}
+
+// ---------- Snapshot types (JSON to React) ----------
+
+#[derive(Serialize, Clone, Default)]
+struct GpuRow {
+    name: String,
+    usage_pct: Option<f64>,
+    temp_c: Option<f64>,
+    power_w: Option<f64>,
+    clock_mhz: Option<u64>,
+}
+
+#[derive(Serialize, Clone, Default)]
+struct ProfileState {
+    daemon: bool,
+    profile: String,
+    quiet_fan: bool,
+    ppd: String,
+    curve: Vec<(i32, u8)>,
+    fan_duty: u8,
+    /// "curve" | "manual" | "ec_auto" (daemon) — "" bila daemon mati.
+    fan_mode: String,
+}
+
+#[derive(Serialize, Clone, Default)]
+struct Snapshot {
+    product: String,
+    cpu_model: String,
+    is_root: bool,
+    cpu_temp_line: String,
+    cpu_freq_line: String,
+    cpu_usage_pct: Option<f64>,
+    governor: String,
+    epp: String,
+    gpus: Vec<GpuRow>,
+    fan_rpms: Vec<u64>,
+    bat_pct: Option<f64>,
+    bat_line: String,
+    bat_start: Option<u64>,
+    bat_end: Option<u64>,
+    mem_pct: Option<f64>,
+    mem_line: String,
+    pkg_watts: Option<f64>,
+    ec_cpu_temp: Option<i32>,
+    ec_fan1_rpm: Option<u32>,
+    ec_fan2_rpm: Option<u32>,
+    ec_duty: Option<u8>,
+    ec_err: Option<String>,
+    max_temp_c: Option<i32>,
+    kbd_nodes: usize,
+    kbd_max: u32,
+    kbd_brightness: Option<u32>,
+    kbd_rgb: Option<(u8, u8, u8)>,
+    kbd_zones: Vec<(u32, (u8, u8, u8))>,
+    /// `true` bila sysfs LED bisa ditulis user ini (udev rule terpasang)
+    /// → tombol Keyboard benar-benar bisa dipakai.
+    kbd_writable: bool,
+    /// Sama untuk BAT0 charge thresholds.
+    bat_writable: bool,
+    /// Efek RGB aktif ("static" = warna diam).
+    kbd_effect: String,
+    /// Pengali kecepatan efek (1.0 = normal).
+    kbd_effect_speed: f32,
+    profile: ProfileState,
+    stamp: u64,
+}
+
+struct SamplerState {
+    prev_stat: Option<cpu::CpuTimes>,
+    prev_rapl: Vec<rapl::RaplDomain>,
+    prev_t: Instant,
+    n: u64,
+}
+
+/// Status animasi RGB keyboard (userspace thread via `kbd_effect`).
+/// Hanya satu efek jalan; start baru mematikan yang lama.
+struct EffectState {
+    /// Nama efek aktif ("static" = tidak ada animasi).
+    current: String,
+    /// Pengali kecepatan terakhir (1.0 = normal).
+    speed: f32,
+    /// Flag stop untuk thread yang jalan (None = tidak ada).
+    stops: Vec<Arc<AtomicBool>>,
+}
+
+impl EffectState {
+    /// Matikan semua thread efek (idempoten). Thread keluar ≤1 tick (60ms).
+    fn stop_all(&mut self) {
+        for s in self.stops.drain(..) {
+            s.store(true, Ordering::Relaxed);
+        }
+        self.current = "static".to_string();
+    }
+}
+
+fn ppd_display(ppd: &str) -> (&'static str, bool) {
+    match ppd {
+        "power-saver" => ("Balanced", true),
+        "balanced" => ("Balanced", false),
+        "performance" => ("Performance", false),
+        _ => ("Balanced", false),
+    }
+}
+
+async fn query_profile() -> ProfileState {
+        if let Ok(conn) = zbus::Connection::system().await {
+        if let Ok(proxy) = AxiooControlProxy::new(&conn).await {
+            if let Ok(profile) = proxy.get_profile().await {
+                return ProfileState {
+                    daemon: true,
+                    profile,
+                    quiet_fan: proxy.get_quiet_fan().await.unwrap_or(false),
+                    ppd: proxy
+                        .get_ppd_profile()
+                        .await
+                        .unwrap_or_else(|_| "-".to_string()),
+                    curve: proxy.get_curve().await.unwrap_or_default(),
+                    fan_duty: proxy.get_fan_duty().await.unwrap_or(0),
+                    fan_mode: proxy.get_fan_mode().await.unwrap_or_else(|_| "curve".to_string()),
+                };
+            }
+        }
+        // Fallback: read PPD directly (display only).
+        let mut ppd: Option<String> = None;
+        if let Ok(builder) = PpdNewProxy::builder(&conn)
+            .destination("org.freedesktop.UPower.PowerProfiles")
+        {
+            if let Ok(p) = builder.build().await {
+                ppd = p.active_profile().await.ok();
+            }
+        }
+        if ppd.is_none() {
+            if let Ok(builder) = PpdOldProxy::builder(&conn)
+                .destination("net.hadess.PowerProfiles")
+            {
+                if let Ok(p) = builder.build().await {
+                    ppd = p.active_profile().await.ok();
+                }
+            }
+        }
+        if let Some(ppd) = ppd {
+            let (label, quiet) = ppd_display(&ppd);
+            return ProfileState {
+                daemon: false,
+                profile: label.to_string(),
+                quiet_fan: quiet,
+                ppd,
+                curve: Vec::new(),
+                fan_duty: 0,
+                fan_mode: String::new(),
+            };
+        }
+    }
+    ProfileState {
+        daemon: false,
+        ppd: "-".to_string(),
+        profile: "Balanced".to_string(),
+        ..Default::default()
+    }
+}
+
+async fn daemon_reachable() -> bool {
+    if let Ok(conn) = zbus::Connection::system().await {
+        if let Ok(proxy) = AxiooControlProxy::new(&conn).await {
+            return proxy.get_profile().await.is_ok();
+        }
+    }
+    false
+}
+
+/// Probe tulis-tanpa-menulis: open O_WRONLY lalu langsung drop.
+/// Aman untuk sysfs (permission dicek saat open, tak ada byte terkirim).
+fn writable(path: &std::path::Path) -> bool {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map(|_| ())
+        .is_ok()
+}
+
+fn f1(v: Option<f64>, unit: &str) -> String {
+    v.map_or_else(|| "-".to_string(), |x| format!("{x:.1}{unit}"))
+}
+
+fn build_snapshot(
+    st: &mut SamplerState,
+    profile: ProfileState,
+    kbd_effect: String,
+    kbd_effect_speed: f32,
+) -> Snapshot {
+    let now = Instant::now();
+    let dt = now.duration_since(st.prev_t).as_secs_f64().max(0.01);
+    st.prev_t = now;
+    st.n += 1;
+
+    let c = cpu::sample();
+    let max_temp_c = c
+        .package_temp_c
+        .into_iter()
+        .chain(c.max_core_temp_c)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .map(|v| v as i32);
+
+    let cur_stat = cpu::read_times();
+    let cpu_usage_pct = match (st.prev_stat, cur_stat) {
+        (Some(p), Some(q)) => cpu::usage_between(&p, &q),
+        _ => None,
+    };
+    if cur_stat.is_some() {
+        st.prev_stat = cur_stat;
+    }
+
+    let cur_rapl = rapl::domains();
+    let pkg_watts = cur_rapl
+        .iter()
+        .find(|d| d.id.ends_with(":0"))
+        .and_then(|after| {
+            st.prev_rapl
+                .iter()
+                .find(|b| b.id == after.id)
+                .and_then(|before| rapl::watts(before, after, dt))
+        })
+        .or_else(|| {
+            cur_rapl.iter().find_map(|after| {
+                st.prev_rapl
+                    .iter()
+                    .find(|b| b.id == after.id)
+                    .and_then(|before| rapl::watts(before, after, dt))
+            })
+        });
+    st.prev_rapl = cur_rapl;
+
+    let gpus: Vec<GpuRow> = nvidia::gpus()
+        .unwrap_or_default()
+        .iter()
+        .map(|g| GpuRow {
+            name: g.name.clone(),
+            usage_pct: g.usage_pct,
+            temp_c: g.temp_c,
+            power_w: g.power_w,
+            clock_mhz: g.gr_clock_mhz,
+        })
+        .collect();
+
+    let fan_rpms: Vec<u64> = hwmon::fans().iter().map(|f| f.rpm).collect();
+
+    let bats = battery::batteries();
+    let bat_pct = bats.first().and_then(|b| b.capacity_pct);
+    let bat_line = bats
+        .first()
+        .map(|b| {
+            format!(
+                "{} {}% {} {}",
+                b.name,
+                b.capacity_pct.map_or("-".to_string(), |x| format!("{x:.0}")),
+                b.status.as_deref().unwrap_or("?"),
+                f1(b.power_w, "W"),
+            )
+        })
+        .unwrap_or_else(|| "-".to_string());
+    // FlexiCharger thresholds come straight from the battery struct.
+    let bat_start = bats.first().and_then(|b| b.charge_start_threshold);
+    let bat_end = bats.first().and_then(|b| b.charge_end_threshold);
+
+    let (mem_pct, mem_line) = match memory::read() {
+        Some(m) => (
+            Some(m.used_pct()),
+            format!("{:.1} / {:.1} GB", m.used_gb(), m.total_gb()),
+        ),
+        None => (None, "-".to_string()),
+    };
+
+    let (ec_cpu, ec_f1, ec_f2, ec_duty, ec_err) = match ec::read_map() {
+        Ok(m) => {
+            let s = fan::snapshot(&m);
+            (
+                Some(s.cpu_temp_raw as i32),
+                Some(s.fan1_rpm),
+                Some(s.fan2_rpm),
+                Some(fan::duty_raw_to_pct(m[fan::EC_REG_FAN1_DUTY as usize])),
+                None,
+            )
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let short =
+                if msg.contains("Permission denied") || msg.contains("os error 13") {
+                    "EC: butuh root — baca via sudo/pkexec".to_string()
+                } else {
+                    msg.chars().take(160).collect()
+                };
+            (None, None, None, None, Some(short))
+        }
+    };
+
+    let kbds = kbd::discover();
+    let mut kbd_zones = Vec::new();
+    for kb in &kbds {
+        if let Some(s) = kbd::read_state(kb) {
+            kbd_zones.push((s.brightness, s.rgb));
+        }
+    }
+    let (kbd_nodes, kbd_max, kbd_brightness, kbd_rgb) = match kbds.first() {
+        Some(kb) => (
+            kbds.len(),
+            kb.max_brightness,
+            kbd::read_state(kb).map(|s| s.brightness),
+            kbd::read_state(kb).map(|s| s.rgb),
+        ),
+        None => (0, 0, None, None),
+    };
+    let kbd_writable = kbds
+        .first()
+        .map(|kb| {
+            // `discover()` hanya tahu `dir`; brightness/multi_intensity pasti ada bila LED valid.
+            writable(&kb.dir.join("brightness"))
+        })
+        .unwrap_or(false);
+    let bat_writable = writable(std::path::Path::new(
+        "/sys/class/power_supply/BAT0/charge_control_end_threshold",
+    ));
+
+    let product = dmi::read_dmi()
+        .get("product_name")
+        .cloned()
+        .unwrap_or_else(|| "Axioo".to_string());
+    let cpu_model = cpu::model_name().unwrap_or_else(|| "CPU".to_string());
+
+    Snapshot {
+        product,
+        cpu_model,
+        is_root: fan_ctrl::is_root(),
+        cpu_temp_line: format!("{} / {}", f1(c.package_temp_c, "°C"), f1(c.max_core_temp_c, "°C")),
+        cpu_freq_line: format!("{} / {}", f1(c.avg_mhz, "MHz"), f1(c.max_mhz, "MHz")),
+        cpu_usage_pct,
+        governor: c.governor.clone().unwrap_or_else(|| "?".to_string()),
+        epp: c.epp.clone().unwrap_or_else(|| "?".to_string()),
+        gpus,
+        fan_rpms,
+        bat_pct,
+        bat_line,
+        bat_start,
+        bat_end,
+        mem_pct,
+        mem_line,
+        pkg_watts,
+        ec_cpu_temp: ec_cpu,
+        ec_fan1_rpm: ec_f1,
+        ec_fan2_rpm: ec_f2,
+        ec_duty,
+        ec_err,
+        max_temp_c,
+        kbd_nodes,
+        kbd_max,
+        kbd_brightness,
+        kbd_rgb,
+        kbd_zones,
+        kbd_writable,
+        bat_writable,
+        kbd_effect,
+        kbd_effect_speed,
+        profile,
+        stamp: st.n,
+    }
+}
+
+// ---------- Tauri commands ----------
+
+#[tauri::command]
+async fn get_snapshot(
+    sampler: tauri::State<'_, Mutex<SamplerState>>,
+    effects: tauri::State<'_, Mutex<EffectState>>,
+) -> Result<Snapshot, String> {
+    let profile = query_profile().await;
+    let mut st = sampler.lock().map_err(|e| format!("sampler lock: {e}"))?;
+    let (fx, fx_speed) = effects
+        .lock()
+        .map(|e| (e.current.clone(), e.speed))
+        .unwrap_or_else(|_| ("static".to_string(), 1.0));
+    Ok(build_snapshot(&mut st, profile, fx, fx_speed))
+}
+
+#[tauri::command]
+async fn set_profile(name: String) -> Result<String, String> {
+    let clean: String = name.chars().take(32).collect();
+    let conn = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("D-Bus tak terjangkau: {e}"))?;
+    let proxy = AxiooControlProxy::new(&conn)
+        .await
+        .map_err(|_| "axiood tidak jalan — jalankan './install-system.sh' dari tauri-app/ lalu restart app".to_string())?;
+    proxy
+        .set_profile(&clean)
+        .await
+        .map_err(|e| {
+            if format!("{e}").contains("ServiceUnknown") {
+                "axiood tidak jalan — jalankan './install-system.sh' dari tauri-app/ lalu restart app".to_string()
+            } else {
+                format!("daemon menolak: {e}")
+            }
+        })
+}
+
+#[tauri::command]
+async fn set_quiet_fan(quiet: bool) -> Result<String, String> {
+    let conn = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("D-Bus tak terjangkau: {e}"))?;
+    let proxy = AxiooControlProxy::new(&conn)
+        .await
+        .map_err(|_| "axiood tidak jalan — jalankan './install-system.sh' dari tauri-app/ lalu restart app".to_string())?;
+    proxy
+        .set_quiet_fan(quiet)
+        .await
+        .map_err(|e| format!("quiet-fan gagal: {e}"))
+}
+
+/// One-shot manual fan duty. REJECTED while axiood runs (daemon owns EC).
+/// Clamp + verify enforced inside `fan_ctrl` (slider JS is untrusted).
+#[tauri::command]
+async fn fan_set_manual(duty: u8) -> Result<String, String> {
+    if daemon_reachable().await {
+        return Err("axiood aktif: kontrol langsung nonaktif — pakai mode + quiet-fan.".to_string());
+    }
+    let want = duty.clamp(fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT);
+    match fan_ctrl::set_manual_duty(want) {
+        Ok(r) => Ok(match (r.verified_pct, r.verify_skipped) {
+            (Some(v), _) => format!("Manual {want}%: OK (EC {v}%)"),
+            (None, true) => format!("Manual {want}%: OK (tanpa verifikasi ec_sys)"),
+            _ => format!("Manual {want}%: OK"),
+        }),
+        Err(fan_ctrl::FanCtrlError::NotRoot) => Err(
+            "Butuh root untuk tulis EC langsung. Solusi: aktifkan axiood ('./install-system.sh') lalu pakai mode + quiet-fan.".to_string(),
+        ),
+        Err(e) => Err(format!("fan set gagal: {e}")),
+    }
+}
+
+#[tauri::command]
+async fn fan_set_auto() -> Result<String, String> {
+    if daemon_reachable().await {
+        return Err("axiood aktif: kontrol langsung nonaktif — pakai mode + quiet-fan.".to_string());
+    }
+    match fan_ctrl::set_auto() {
+        Ok(()) => Ok("EC auto: OK".to_string()),
+        Err(fan_ctrl::FanCtrlError::NotRoot) => Err(
+            "Butuh root untuk tulis EC langsung. Solusi: aktifkan axiood ('./install-system.sh') lalu pakai mode + quiet-fan.".to_string(),
+        ),
+        Err(e) => Err(format!("fan auto gagal: {e}")),
+    }
+}
+
+async fn daemon_proxy() -> Result<AxiooControlProxy<'static>, String> {
+    let conn = zbus::Connection::system()
+        .await
+        .map_err(|e| format!("D-Bus tak terjangkau: {e}"))?;
+    AxiooControlProxy::new(&conn)
+        .await
+        .map_err(|_| "axiood tidak jalan — jalankan './install-system.sh' dari tauri-app/ lalu restart app".to_string())
+}
+
+/// Serahkan kipas ke firmware EC auto (via daemon; RAPL/PPD tetap ikut profil).
+#[tauri::command]
+async fn set_fan_ec_auto(auto: bool) -> Result<String, String> {
+    let proxy = daemon_proxy().await?;
+    proxy
+        .set_fan_ec_auto(auto)
+        .await
+        .map_err(|e| format!("ec_auto gagal: {e}"))
+}
+
+/// Kunci duty manual via loop daemon (clamp 40–100% di daemon).
+#[tauri::command]
+async fn set_fan_manual(duty: u8) -> Result<String, String> {
+    let want = duty.clamp(fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT);
+    let proxy = daemon_proxy().await?;
+    proxy
+        .set_fan_manual(want)
+        .await
+        .map_err(|e| format!("manual gagal: {e}"))
+}
+
+/// Kembali ke kurva daemon (hapus override manual).
+#[tauri::command]
+async fn clear_fan_override() -> Result<String, String> {
+    let proxy = daemon_proxy().await?;
+    proxy
+        .clear_fan_override()
+        .await
+        .map_err(|e| format!("kembali ke kurva gagal: {e}"))
+}
+
+#[derive(serde::Deserialize)]
+struct KbdSetArgs {
+    zone: Option<usize>,
+    brightness: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+/// Keyboard backlight via sysfs LED (safe, udev-rule writable).
+/// Mematikan efek animasi yang sedang jalan (biar tak rebutan tulis sysfs).
+#[tauri::command]
+async fn kbd_set(
+    args: KbdSetArgs,
+    effects: tauri::State<'_, Mutex<EffectState>>,
+) -> Result<String, String> {
+    if let Ok(mut fx) = effects.lock() {
+        fx.stop_all();
+    }
+    let kbds = kbd::discover();
+    if kbds.is_empty() {
+        return Err("Keyboard backlight tidak ditemukan.".to_string());
+    }
+    let targets: Vec<usize> = match args.zone {
+        Some(i) => {
+            if i >= kbds.len() {
+                return Err(format!("Zona {i} di luar jangkauan (0..{}).", kbds.len()));
+            }
+            vec![i]
+        }
+        None => (0..kbds.len()).collect(),
+    };
+    for i in targets {
+        let kb = &kbds[i];
+        let br = args.brightness.min(kb.max_brightness);
+        kbd::set(kb, br, (args.r, args.g, args.b)).map_err(|e| {
+            let msg = format!("{e}");
+            if msg.contains("permission denied") {
+                format!("kbd zona {i}: permission denied — jalankan './install-system.sh' (udev rule) lalu restart app")
+            } else {
+                format!("kbd zona {i} gagal: {e}")
+            }
+        })?;
+    }
+    Ok(format!(
+        "Keyboard → brightness {} rgb({},{},{})",
+        args.brightness, args.r, args.g, args.b
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct KbdEffectArgs {
+    effect: String,
+    r: u8,
+    g: u8,
+    b: u8,
+    brightness: u32,
+    /// Pengali kecepatan (None = 1.0); di-clamp 0.1..=4.0.
+    speed: Option<f32>,
+}
+
+/// Animasi RGB keyboard (thread userspace via `kbd_effect`, tulis sysfs
+/// periodik 60ms — privilege sama seperti `kbd_set`, tak perlu root
+/// tambahan). `"static"` = hentikan animasi (kembali ke warna diam).
+/// Mematikan efek lama dulu; hanya satu yang jalan.
+#[tauri::command]
+async fn kbd_effect_start(
+    args: KbdEffectArgs,
+    effects: tauri::State<'_, Mutex<EffectState>>,
+) -> Result<String, String> {
+    let effect = kbd_effect::KbdEffect::parse(&args.effect.chars().take(16).collect::<String>())
+        .ok_or_else(|| format!("efek tak dikenal: '{}'", args.effect))?;
+    if kbd::discover().is_empty() {
+        return Err("Keyboard backlight tidak ditemukan.".to_string());
+    }
+    let mut fx = effects
+        .lock()
+        .map_err(|e| format!("effect lock: {e}"))?;
+    fx.stop_all();
+    if effect == kbd_effect::KbdEffect::Static {
+        return Ok("Efek mati — warna diam.".to_string());
+    }
+    let max = kbd::discover()
+        .first()
+        .map(|kb| kb.max_brightness)
+        .unwrap_or(255);
+    let speed = args.speed.unwrap_or(1.0).clamp(0.1, 4.0);
+    let stop = kbd_effect::spawn(
+        effect.clone(),
+        (args.r, args.g, args.b),
+        args.brightness.min(max),
+        speed,
+    );
+    fx.stops.push(stop);
+    fx.current = effect.as_str().to_string();
+    fx.speed = speed;
+    Ok(format!("Efek {} jalan ({}x).", effect.label(), speed))
+}
+
+/// Hentikan animasi RGB (kembalikan warna diam terakhir).
+#[tauri::command]
+async fn kbd_effect_stop(
+    effects: tauri::State<'_, Mutex<EffectState>>,
+) -> Result<String, String> {
+    let mut fx = effects
+        .lock()
+        .map_err(|e| format!("effect lock: {e}"))?;
+    fx.stop_all();
+    Ok("Efek mati — warna diam.".to_string())
+}
+
+#[tauri::command]
+async fn battery_set(start: Option<u64>, end: Option<u64>) -> Result<String, String> {
+    // Re-validate ranges server-side (JS untrusted).
+    if let Some(s) = start {
+        if !(40..=95).contains(&s) {
+            return Err("start harus 40–95.".to_string());
+        }
+    }
+    if let Some(e) = end {
+        if !(60..=100).contains(&e) {
+            return Err("end harus 60–100.".to_string());
+        }
+    }
+    if let (Some(s), Some(e)) = (start, end) {
+        if s >= e {
+            return Err("start harus < end.".to_string());
+        }
+    }
+    battery::set_charge_thresholds("BAT0", start, end).map_err(|e| {
+        let msg = format!("{e}");
+        if msg.contains("permission denied") {
+            "battery: permission denied — jalankan './install-system.sh' (udev rule) lalu restart app".to_string()
+        } else {
+            format!("battery set gagal: {e}")
+        }
+    })?;
+    Ok("Charge threshold tersimpan.".to_string())
+}
+
+fn main() {
+    tauri::Builder::default()
+        .manage(Mutex::new(SamplerState {
+            prev_stat: cpu::read_times(),
+            prev_rapl: rapl::domains(),
+            prev_t: Instant::now(),
+            n: 0,
+        }))
+        .manage(Mutex::new(EffectState {
+            current: "static".to_string(),
+            speed: 1.0,
+            stops: Vec::new(),
+        }))
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot,
+            set_profile,
+            set_quiet_fan,
+            fan_set_manual,
+            fan_set_auto,
+            set_fan_ec_auto,
+            set_fan_manual,
+            clear_fan_override,
+            kbd_set,
+            kbd_effect_start,
+            kbd_effect_stop,
+            battery_set,
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to run axioo-center");
+}
