@@ -1,6 +1,9 @@
 target/
 Cargo.lock
 dist/
+tauri-app/dist/
+node_modules/
+tauri-app/node_modules/
 .tools/
 *.AppImage
 *.rej
