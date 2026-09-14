@@ -55,6 +55,9 @@ export function KeyboardVisual({ zones, maxBright, selected, onSelect }: {
   onSelect: (z: number | null) => void;
 }) {
   const n = Math.max(zones.length, 1);
+  // Indeks 4 (bila ada ≥5 zona) = lightbar exhaust belakang (EC 0x07),
+  // digambar sebagai strip terpisah di bawah keyboard.
+  const rearIdx = zones.length >= 5 ? 4 : -1;
   const colors: ZoneColor[] = Array.from({ length: Math.max(n, 4) }, (_, i) => {
     const z = zones[i % n];
     return { rgb: z ? z[1] : [60, 55, 45], bright: z ? z[0] : 0 };
@@ -137,10 +140,32 @@ export function KeyboardVisual({ zones, maxBright, selected, onSelect }: {
 
   const totalW = NUM_X + 4 * U + 3 * GAP;
   const totalH = 6 * H + 5 * GAP;
+  const rear = rearIdx >= 0 ? colors[rearIdx % colors.length] : null;
+  const rs = rear && maxBright > 0 ? rear.bright / maxBright : 0;
+  const [rr, gg, bb] = rear
+    ? rear.rgb.map((v) => Math.round(10 + (v - 10) * Math.max(rs, 0.06)))
+    : [0, 0, 0];
+  const rearSel = selected === null || selected === rearIdx;
+  const stripY = totalH + 16;
   return (
-    <svg viewBox={`-8 -8 ${totalW + 16} ${totalH + 16}`} className="w-full select-none">
+    <svg viewBox={`-8 -8 ${totalW + 16} ${totalH + (rear ? 64 : 16)}`} className="w-full select-none">
       {render(MAIN, 0)}
       {renderNumpad()}
+      {rear && (
+        <g opacity={rearSel ? 1 : 0.35}
+          onClick={() => onSelect(selected === rearIdx ? null : rearIdx)} className="cursor-pointer">
+          <rect x={0} y={stripY} width={totalW} height={22} rx={6}
+            fill={`rgb(${rr},${gg},${bb})`}
+            stroke={selected === rearIdx ? "rgb(var(--accent))" : "#000"}
+            strokeWidth={selected === rearIdx ? 3 : 1.5}
+            style={{ filter: `drop-shadow(0 0 10px rgb(${rr},${gg},${bb}) / 0.7)` }} />
+          <text x={totalW / 2} y={stripY + 15} textAnchor="middle" fontSize={12}
+            fontWeight={800} fill={(0.299 * rr + 0.587 * gg + 0.114 * bb) / 255 > 0.55 ? "#14110b" : "#f5efe0"}
+            fontFamily="'Iosevka Nerd Font', monospace" fontStyle="italic" letterSpacing={4}>
+            REAR EXHAUST
+          </text>
+        </g>
+      )}
     </svg>
   );
 }

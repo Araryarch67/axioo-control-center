@@ -413,6 +413,10 @@ function KeyboardPanel({ snap, zone, setZone }: {
   snap: Snapshot | null; zone: number | null; setZone: (z: number | null) => void;
 }) {
   const max = snap?.kbd_max || 255;
+  const nZoneTotal = snap?.kbd_zones.length ?? 0;
+  /** Indeks 4 dari 5+ zona = lightbar exhaust belakang (EC 0x07). */
+  const zoneName = (i: number | null) =>
+    i == null ? "semua" : nZoneTotal >= 5 && i === 4 ? "Rear" : `Z${i + 1}`;
   const [bright, setBright] = React.useState(255);
   const [hex, setHex] = React.useState("#f5efe0");
   const [draft, setDraft] = React.useState("#f5efe0");
@@ -551,7 +555,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
       <Card className="col-span-12">
         <CardTitle icon={<Keyboard size={14} />}
           right={<Chip on={canWrite} color={canWrite ? "ok" : undefined}>
-            {zone == null ? "live · semua" : `live · Z${zone + 1}`} · {fx !== "static" ? `${fx} · ` : ""}{status}
+            {`live · ${zoneName(zone)}`} · {fx !== "static" ? `${fx} · ` : ""}{status}
           </Chip>}>
           Live map — klik untuk pilih zona{fx !== "static" ? " · beranimasi" : ""}
         </CardTitle>
@@ -560,7 +564,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
         <div className="num mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-faint">
           {shownZones.map((z, i) => (
             <span key={i}>
-              Z{i + 1} · {z[0]} · <span className="font-bold" style={{ color: `rgb(${z[1][0]},${z[1][1]},${z[1][2]})` }}>■</span> {z[1].join(" ")}
+              {zoneName(i)} · {z[0]} · <span className="font-bold" style={{ color: `rgb(${z[1][0]},${z[1][1]},${z[1][2]})` }}>■</span> {z[1].join(" ")}
             </span>
           ))}
         </div>
@@ -607,7 +611,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
       <Card className="col-span-12 xl:col-span-5">
         <CardTitle icon={<Keyboard size={14} />} right={<Chip on={(snap?.kbd_nodes ?? 0) > 0}>{snap?.kbd_nodes ?? 0} LEDs</Chip>}>Zones</CardTitle>
         <div className="flex flex-wrap gap-2">
-          {[{ label: "All", z: null }, ...Array.from({ length: snap?.kbd_nodes ?? 0 }, (_, i) => ({ label: `Z${i + 1}`, z: i as number | null }))].map((o) => (
+          {[{ label: "All", z: null }, ...Array.from({ length: snap?.kbd_nodes ?? 0 }, (_, i) => ({ label: zoneName(i), z: i as number | null }))].map((o) => (
             <button key={o.label} onClick={() => setZone(o.z)}
               className={cn("rounded px-3.5 py-2 text-[13px] font-extrabold uppercase transition-all",
                 zone === o.z
@@ -640,7 +644,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
               style={{ background: `rgb(${r},${g},${b})`, opacity: (bright / Math.max(max, 1)) * (0.35 + (0.65 * i) / 13) }} />
           ))}
         </div>
-        <div className="num mt-1.5 text-center text-[11px] text-faint">preview · {zone == null ? "all zones" : `zone ${zone + 1}`}</div>
+        <div className="num mt-1.5 text-center text-[11px] text-faint">preview · {zoneName(zone) === "semua" ? "all zones" : zoneName(zone)}</div>
       </Card>
       <Card className="col-span-12 xl:col-span-7">
         <CardTitle right={<span className="h-6 w-12 rounded-md border-2 border-black" style={{ background: hex }} />}>Color</CardTitle>
