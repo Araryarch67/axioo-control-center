@@ -66,15 +66,9 @@ pub fn sample() -> CpuSample {
         max_core_temp_c: max_core,
         avg_mhz: avg,
         max_mhz: max,
-        driver: read_trim_str(
-            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver",
-        ),
-        governor: read_trim_str(
-            "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor",
-        ),
-        epp: read_trim_str(
-            "/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference",
-        ),
+        driver: read_trim_str("/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver"),
+        governor: read_trim_str("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
+        epp: read_trim_str("/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"),
     }
 }
 
@@ -148,7 +142,10 @@ mod tests {
     #[test]
     fn parses_model_name() {
         let text = "processor\t: 0\nmodel name\t: Intel(R) Core(TM) i9-14900HX\n";
-        assert_eq!(parse_model_name(text), Some("Intel(R) Core(TM) i9-14900HX".to_string()));
+        assert_eq!(
+            parse_model_name(text),
+            Some("Intel(R) Core(TM) i9-14900HX".to_string())
+        );
         assert_eq!(parse_model_name("processor: 0\n"), None);
     }
 
@@ -158,7 +155,13 @@ mod tests {
         let b = "cpu  200 0 100 900 50 0 0 0 0 0\n";
         let pa = parse_cpu_line(a).unwrap();
         let pb = parse_cpu_line(b).unwrap();
-        assert_eq!(pa, CpuTimes { idle: 850, total: 1000 });
+        assert_eq!(
+            pa,
+            CpuTimes {
+                idle: 850,
+                total: 1000
+            }
+        );
         // Busy delta 150 of 250 total = 60%.
         assert_eq!(usage_between(&pa, &pb), Some(60.0));
         assert_eq!(usage_between(&pa, &pa), None);

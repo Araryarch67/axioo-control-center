@@ -29,7 +29,11 @@ pub fn leds() -> Vec<Led> {
         let max = read_trim_str(&format!("{base}/max_brightness"))
             .and_then(|v| parse_f64(&v))
             .unwrap_or(0.0);
-        out.push(Led { name, brightness, max_brightness: max });
+        out.push(Led {
+            name,
+            brightness,
+            max_brightness: max,
+        });
     }
     out
 }

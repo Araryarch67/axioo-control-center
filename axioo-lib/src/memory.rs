@@ -45,7 +45,10 @@ pub fn parse_meminfo(text: &str) -> Option<MemInfo> {
             _ => {}
         }
     }
-    Some(MemInfo { total_kb: total?, avail_kb: avail? })
+    Some(MemInfo {
+        total_kb: total?,
+        avail_kb: avail?,
+    })
 }
 
 #[cfg(test)]

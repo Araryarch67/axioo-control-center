@@ -1,0 +1,43 @@
+# Maintainer: Axioo Control Center <https://github.com/anomalyco/opencode>
+pkgname=axioo-control-center-git
+pkgver=0.4.0.r0.g0000000
+pkgrel=1
+pkgdesc="Linux hardware control for Axioo/Clevo laptops (fan, RAPL, kbd backlight via axiood daemon)"
+arch=('x86_64')
+url="https://github.com/anomalyco/opencode"
+license=('AGPL3')
+depends=('dbus' 'polkit' 'power-profiles-daemon')
+makedepends=('cargo' 'rust' 'git')
+optdepends=('clevo-drivers-dkms-git: kernel drivers for kbd LED + EC (Studio X quirk)')
+provides=('axioo-control-center')
+conflicts=('axioo-control-center')
+source=("git+file://$startdir/../..")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/${pkgname%-git}"
+  printf "0.4.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/${pkgname%-git}"
+  cargo build --release --workspace
+}
+
+package() {
+  cd "$srcdir/${pkgname%-git}"
+  install -Dm755 target/release/axioo-ctl "$pkgdir/usr/bin/axioo-ctl"
+  install -Dm755 target/release/axiood "$pkgdir/usr/bin/axiood"
+  install -Dm755 target/release/axioo-control-center "$pkgdir/usr/bin/axioo-control-center"
+  # D-Bus + polkit
+  install -Dm644 packaging/com.axioo.Control.conf "$pkgdir/etc/dbus-1/system.d/com.axioo.Control.conf"
+  install -Dm644 packaging/com.axioo.Control.policy "$pkgdir/usr/share/polkit-1/actions/com.axioo.Control.policy"
+  # systemd
+  install -Dm644 packaging/axiood.service "$pkgdir/usr/lib/systemd/system/axiood.service"
+  # udev — kbd LED writable
+  install -Dm644 packaging/udev/99-axioo-kbd.rules "$pkgdir/usr/lib/udev/rules.d/99-axioo-kbd.rules"
+  # docs
+  install -Dm644 README.md "$pkgdir/usr/share/doc/${pkgname%-git}/README.md"
+  install -Dm644 docs/ec-fan-protocol.md "$pkgdir/usr/share/doc/${pkgname%-git}/ec-fan-protocol.md"
+  install -Dm644 docs/kbd-backlight.md "$pkgdir/usr/share/doc/${pkgname%-git}/kbd-backlight.md"
+}

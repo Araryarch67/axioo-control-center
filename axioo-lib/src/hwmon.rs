@@ -39,8 +39,12 @@ pub fn chips() -> Vec<(String, String)> {
 }
 
 fn chip_name(hwmon: &str) -> String {
-    read_trim(&std::path::Path::new("/sys/class/hwmon").join(hwmon).join("name"))
-        .unwrap_or_else(|| "?".to_string())
+    read_trim(
+        &std::path::Path::new("/sys/class/hwmon")
+            .join(hwmon)
+            .join("name"),
+    )
+    .unwrap_or_else(|| "?".to_string())
 }
 
 /// All `tempN_input` sensors (millidegree C -> degree C).
@@ -49,7 +53,9 @@ pub fn temps() -> Vec<TempSensor> {
     for (hwmon, _) in chips() {
         let chip = chip_name(&hwmon);
         let dir = format!("/sys/class/hwmon/{hwmon}");
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         let mut inputs: Vec<String> = entries
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -63,7 +69,9 @@ pub fn temps() -> Vec<TempSensor> {
                 Some(v) => v,
                 None => continue,
             };
-            let Some(milli) = parse_f64(&raw) else { continue };
+            let Some(milli) = parse_f64(&raw) else {
+                continue;
+            };
             let label = crate::read_trim_str(&format!("{base}_label"))
                 .unwrap_or_else(|| prefix.to_string());
             out.push(TempSensor {
@@ -88,7 +96,9 @@ pub fn fans() -> Vec<FanSensor> {
     for (hwmon, _) in chips() {
         let chip = chip_name(&hwmon);
         let dir = format!("/sys/class/hwmon/{hwmon}");
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         let mut inputs: Vec<String> = entries
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -102,10 +112,16 @@ pub fn fans() -> Vec<FanSensor> {
                 Some(v) => v,
                 None => continue,
             };
-            let Ok(rpm) = raw.parse::<u64>() else { continue };
+            let Ok(rpm) = raw.parse::<u64>() else {
+                continue;
+            };
             let label = crate::read_trim_str(&format!("{base}_label"))
                 .unwrap_or_else(|| prefix.to_string());
-            out.push(FanSensor { chip: chip.clone(), label, rpm });
+            out.push(FanSensor {
+                chip: chip.clone(),
+                label,
+                rpm,
+            });
         }
     }
     out

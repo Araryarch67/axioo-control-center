@@ -15,6 +15,7 @@ pub mod fan;
 pub mod fan_ctrl;
 pub mod hwmon;
 pub mod kbd;
+pub mod kbd_effect;
 pub mod leds;
 pub mod memory;
 pub mod nvidia;

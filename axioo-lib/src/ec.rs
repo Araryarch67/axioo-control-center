@@ -20,9 +20,13 @@ pub const EC_MAP_LEN: usize = 256;
 pub fn ec_sys_available() -> bool {
     let release = read_trim_str("/proc/sys/kernel/osrelease").unwrap_or_default();
     let pattern = format!("/lib/modules/{release}/kernel/drivers/acpi/ec_sys.ko");
-    [&format!("{pattern}.zst"), &format!("{pattern}.xz"), &pattern]
-        .iter()
-        .any(|p| fs::metadata(p).is_ok())
+    [
+        &format!("{pattern}.zst"),
+        &format!("{pattern}.xz"),
+        &pattern,
+    ]
+    .iter()
+    .any(|p| fs::metadata(p).is_ok())
 }
 
 /// Value of the `ec_sys.write_support` module parameter when loaded.
@@ -75,18 +79,26 @@ impl std::error::Error for EcReadError {}
 /// Never writes; the file is opened read-only and read once.
 pub fn read_map() -> Result<[u8; EC_MAP_LEN], EcReadError> {
     let file = fs::File::open(EC_IO_PATH).map_err(|e| match e.kind() {
-        io::ErrorKind::NotFound => EcReadError::NotPresent { detail: e.to_string() },
-        io::ErrorKind::PermissionDenied => EcReadError::Permission { detail: e.to_string() },
+        io::ErrorKind::NotFound => EcReadError::NotPresent {
+            detail: e.to_string(),
+        },
+        io::ErrorKind::PermissionDenied => EcReadError::Permission {
+            detail: e.to_string(),
+        },
         _ => EcReadError::Io(e),
     })?;
     let mut buf = Vec::with_capacity(EC_MAP_LEN);
-    file.take(EC_MAP_LEN as u64).read_to_end(&mut buf).map_err(|e| {
-        if e.kind() == io::ErrorKind::PermissionDenied {
-            EcReadError::Permission { detail: e.to_string() }
-        } else {
-            EcReadError::Io(e)
-        }
-    })?;
+    file.take(EC_MAP_LEN as u64)
+        .read_to_end(&mut buf)
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::PermissionDenied {
+                EcReadError::Permission {
+                    detail: e.to_string(),
+                }
+            } else {
+                EcReadError::Io(e)
+            }
+        })?;
     if buf.len() < EC_MAP_LEN {
         return Err(EcReadError::ShortRead { got: buf.len() });
     }

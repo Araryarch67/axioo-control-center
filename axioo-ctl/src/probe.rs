@@ -69,7 +69,9 @@ pub fn run() {
     for d in domains {
         let energy = d
             .energy_uj
-            .map_or("(energy_uj needs root)".to_string(), |e| format!("energy={e} uJ"));
+            .map_or("(energy_uj needs root)".to_string(), |e| {
+                format!("energy={e} uJ")
+            });
         println!("  {:<16} {:<12} {energy}", d.id, d.name);
         for (cname, w) in &d.constraints {
             println!("  {:<16}   constraint {cname} = {w:.1}W", "");
@@ -109,8 +111,10 @@ pub fn run() {
             b.voltage_v.unwrap_or(0.0),
             fmt_opt_w(b.power_w),
             b.cycle_count.map_or("?".to_string(), |c| c.to_string()),
-            b.charge_start_threshold.map_or("?".to_string(), |c| c.to_string()),
-            b.charge_end_threshold.map_or("?".to_string(), |c| c.to_string()),
+            b.charge_start_threshold
+                .map_or("?".to_string(), |c| c.to_string()),
+            b.charge_end_threshold
+                .map_or("?".to_string(), |c| c.to_string()),
         );
     }
 
@@ -140,7 +144,10 @@ pub fn run() {
         })
         .collect();
     if relevant.is_empty() {
-        println!("  (no CLV*/EC/WMI platform device matched; {} total)", devs.len());
+        println!(
+            "  (no CLV*/EC/WMI platform device matched; {} total)",
+            devs.len()
+        );
     }
     for d in relevant {
         println!("  {d}");

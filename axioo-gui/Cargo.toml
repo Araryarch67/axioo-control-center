@@ -14,3 +14,4 @@ axioo-lib = { path = "../axioo-lib" }
 gpui = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+zbus = "5"

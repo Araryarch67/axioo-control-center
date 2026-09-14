@@ -62,5 +62,9 @@ pub fn gpus() -> Option<Vec<Gpu>> {
             usage_pct: cols.get(7).and_then(|s| parse_opt_f64(s)),
         });
     }
-    if gpus.is_empty() { None } else { Some(gpus) }
+    if gpus.is_empty() {
+        None
+    } else {
+        Some(gpus)
+    }
 }

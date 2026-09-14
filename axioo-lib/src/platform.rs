@@ -8,8 +8,7 @@ use crate::{parse_f64, read_trim_str};
 /// (`current_profile`, `available_choices`) when the firmware exposes it.
 pub fn platform_profile() -> Option<(String, String)> {
     let cur = read_trim_str("/sys/firmware/acpi/platform_profile")?;
-    let choices =
-        read_trim_str("/sys/firmware/acpi/platform_profile_choices").unwrap_or_default();
+    let choices = read_trim_str("/sys/firmware/acpi/platform_profile_choices").unwrap_or_default();
     Some((cur, choices))
 }
 
@@ -66,7 +65,11 @@ pub fn thermal_zones() -> Vec<ThermalZone> {
         let temp = read_trim_str(&format!("{base}/temp"))
             .and_then(|v| parse_f64(&v))
             .map(|v| v / 1000.0);
-        out.push(ThermalZone { name: format!("thermal_zone{n}"), kind, temp_c: temp });
+        out.push(ThermalZone {
+            name: format!("thermal_zone{n}"),
+            kind,
+            temp_c: temp,
+        });
     }
     out
 }
@@ -90,10 +93,8 @@ pub fn cooling_devices() -> Vec<CoolingDevice> {
         out.push(CoolingDevice {
             name: format!("cooling_device{n}"),
             kind,
-            cur_state: read_trim_str(&format!("{base}/cur_state"))
-                .and_then(|v| v.parse().ok()),
-            max_state: read_trim_str(&format!("{base}/max_state"))
-                .and_then(|v| v.parse().ok()),
+            cur_state: read_trim_str(&format!("{base}/cur_state")).and_then(|v| v.parse().ok()),
+            max_state: read_trim_str(&format!("{base}/max_state")).and_then(|v| v.parse().ok()),
         });
     }
     out

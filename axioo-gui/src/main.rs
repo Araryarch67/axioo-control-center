@@ -1,68 +1,431 @@
+#![allow(dead_code, unused_variables)]
 //! axioo-control-center: GPUI desktop frontend, Ryoku-mono style.
 //!
 //! Bahasa desain: monokrom brutalist (panel hairline, header `// ..._`,
 //! pill seleksi putih, barcode, bottom action bar). Font: Iosevka Nerd
 //! Font Mono. Sidebar bernomor + label Jepang, konten per tab.
 //!
-//! Privilege: app memastikan diri jalan sebagai root — bila euid != 0,
-//! relaunch diri via `pkexec` SEKALI di awal (env Wayland diteruskan).
-//! Tombol tulis EC memanggil `axioo-lib::fan_ctrl` langsung (one-shot
-//! `set|auto`) di background thread; fallback pkexec per-aksi hanya bila
-//! relaunch dibatalkan/gagal. Loop kurva kontinu tetap milik `axiood`.
+//! Privilege: bila `axiood` jalan (system bus `com.axioo.Control`), app
+//! jadi klien tipis — klik mode / quiet-fan dikirim ke daemon, tampilan
+//! mengikuti state daemon (yang juga mengikuti PPD, jadi perubahan dari
+//! `powerprofilesctl`/slider GNOME tampil sinkron). Tulis EC langsung
+//! (one-shot `set|auto` + fallback pkexec) HANYA dipakai saat daemon mati.
+//! Loop kurva kontinu milik `axiood`, bukan GUI ini.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
+mod profile_client;
 
 use axioo_lib::{
     battery, cpu,
     cpu::CpuTimes,
     dmi, ec,
     fan::{self, FanSnapshot},
-    fan_ctrl, hwmon, kbd, memory, nvidia, rapl,
+    fan_ctrl, hwmon, kbd, kbd_effect, memory, nvidia, rapl,
 };
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Application, AsyncApp, Bounds, ClickEvent, Context, Div,
-    IntoElement, InteractiveElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, PathBuilder, Render, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Timer, Window, WindowBounds, WindowOptions, canvas, div,
-    point, px, rgb, rgba,
+    canvas, div, point, px, rgb, rgba, svg, AnyElement, App, AppContext, Application, AsyncApp,
+    Bounds, ClickEvent, Context, Div, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Render, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Timer, Window, WindowBounds, WindowOptions,
 };
 
-// ---------- Ryoku-mono palette ----------
-const BG: u32 = 0x0a0a0b;
-const PANEL: u32 = 0x111113;
-const PANEL2: u32 = 0x1a1a1e;
-const BORDER: u32 = 0x2b2b30;
-const TEXT: u32 = 0xf2f2f0;
-const DIM: u32 = 0x8e8e93;
-const FAINT: u32 = 0x55555a;
+// ---------- Palette (fallback) + Theme system ----------
+const BG: u32 = 0x0f0f12;
+const PANEL: u32 = 0x1b1b1f;
+const PANEL2: u32 = 0x232328;
+const BORDER: u32 = 0x2e2e34;
+const TEXT: u32 = 0xf2f2f5;
+const DIM: u32 = 0x9a9aa2;
+const FAINT: u32 = 0x6b6b72;
 const WHITE: u32 = 0xffffff;
-const INK: u32 = 0x0a0a0b;
+const INK: u32 = 0x0f0f12;
+const ACCENT: u32 = 0x8b7cff;
+#[allow(dead_code)]
+const BORDER_SOFT: u32 = 0x3a3a42;
+#[allow(dead_code)]
+const ACCENT_SOFT: u32 = 0x6366f1;
 
 const FONT: &str = "Iosevka Nerd Font Mono";
 
-const MODE_QUIET: &str = "Quiet";
+#[derive(Clone, Debug)]
+struct Theme {
+    name: &'static str,
+    label: &'static str,
+    bg: u32,
+    panel: u32,
+    panel2: u32,
+    border: u32,
+    border_soft: u32,
+    text: u32,
+    dim: u32,
+    faint: u32,
+    white: u32,
+    ink: u32,
+    accent: u32,
+    accent_soft: u32,
+}
+
+impl Theme {
+    fn ryoku() -> Self {
+        Self {
+            name: "ryoku",
+            label: "Ryoku",
+            bg: 0x0f0f12,
+            panel: 0x1b1b1f,
+            panel2: 0x232328,
+            border: 0x2e2e34,
+            border_soft: 0x3a3a42,
+            text: 0xf2f2f5,
+            dim: 0x9a9aa2,
+            faint: 0x6b6b72,
+            white: 0xffffff,
+            ink: 0x0f0f12,
+            accent: 0x8b7cff,
+            accent_soft: 0x6366f1,
+        }
+    }
+    fn gruvbox() -> Self {
+        Self {
+            name: "gruvbox",
+            label: "Gruvbox Dark",
+            bg: 0x282828,
+            panel: 0x3c3836,
+            panel2: 0x504945,
+            border: 0x504945,
+            border_soft: 0x665c54,
+            text: 0xebdbb2,
+            dim: 0xa89984,
+            faint: 0x665c54,
+            white: 0xfbf1c7,
+            ink: 0x282828,
+            accent: 0xfe8019,
+            accent_soft: 0xd65d0e,
+        }
+    }
+    fn dracula() -> Self {
+        Self {
+            name: "dracula",
+            label: "Dracula",
+            bg: 0x282a36,
+            panel: 0x343746,
+            panel2: 0x44475a,
+            border: 0x6272a4,
+            border_soft: 0x44475a,
+            text: 0xf8f8f2,
+            dim: 0xbd93f9,
+            faint: 0x6272a4,
+            white: 0xffffff,
+            ink: 0x282a36,
+            accent: 0xff79c6,
+            accent_soft: 0xbd93f9,
+        }
+    }
+    fn nord() -> Self {
+        Self {
+            name: "nord",
+            label: "Nord",
+            bg: 0x2e3440,
+            panel: 0x3b4252,
+            panel2: 0x434c5e,
+            border: 0x4c566a,
+            border_soft: 0x434c5e,
+            text: 0xeceff4,
+            dim: 0xd8dee9,
+            faint: 0x4c566a,
+            white: 0xeceff4,
+            ink: 0x2e3440,
+            accent: 0x88c0d0,
+            accent_soft: 0x81a1c1,
+        }
+    }
+    fn tokyo() -> Self {
+        Self {
+            name: "tokyo",
+            label: "Tokyo Night",
+            bg: 0x1a1b26,
+            panel: 0x24283b,
+            panel2: 0x414868,
+            border: 0x414868,
+            border_soft: 0x565f89,
+            text: 0xc0caf5,
+            dim: 0x9aa5ce,
+            faint: 0x565f89,
+            white: 0xc0caf5,
+            ink: 0x1a1b26,
+            accent: 0x7aa2f7,
+            accent_soft: 0x7dcfff,
+        }
+    }
+    fn catppuccin() -> Self {
+        Self {
+            name: "catppuccin",
+            label: "Catppuccin Mocha",
+            bg: 0x1e1e2e,
+            panel: 0x313244,
+            panel2: 0x45475a,
+            border: 0x585b70,
+            border_soft: 0x45475a,
+            text: 0xcdd6f4,
+            dim: 0xa6adc8,
+            faint: 0x585b70,
+            white: 0xcdd6f4,
+            ink: 0x1e1e2e,
+            accent: 0xcba6f7,
+            accent_soft: 0xf38ba8,
+        }
+    }
+    fn solarized() -> Self {
+        Self {
+            name: "solarized",
+            label: "Solarized Dark",
+            bg: 0x002b36,
+            panel: 0x073642,
+            panel2: 0x586e75,
+            border: 0x657b83,
+            border_soft: 0x586e75,
+            text: 0x839496,
+            dim: 0x93a1a1,
+            faint: 0x586e75,
+            white: 0xfdf6e3,
+            ink: 0x002b36,
+            accent: 0x268bd2,
+            accent_soft: 0x2aa198,
+        }
+    }
+    fn one_dark() -> Self {
+        Self {
+            name: "one-dark",
+            label: "One Dark",
+            bg: 0x282c34,
+            panel: 0x353b45,
+            panel2: 0x3e4451,
+            border: 0x3e4451,
+            border_soft: 0x4b5263,
+            text: 0xabb2bf,
+            dim: 0x5c6370,
+            faint: 0x4b5263,
+            white: 0xabb2bf,
+            ink: 0x282c34,
+            accent: 0x61afef,
+            accent_soft: 0x56b6c2,
+        }
+    }
+    fn matugen() -> Self {
+        // Baca ~/.cache/ryoku/colors.json (Material You via matugen)
+        let mut t = Self::ryoku();
+        t.name = "matugen";
+        t.label = "Matugen";
+        let path = std::env::var("HOME")
+            .map(|h| format!("{h}/.cache/ryoku/colors.json"))
+            .unwrap_or_else(|_| "/tmp/colors.json".to_string());
+        if let Ok(s) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+                let hex = |k: &str| v.get(k).and_then(|x| x.as_str()).and_then(parse_hex);
+                // Map Material tokens → palette
+                if let Some(c) = hex("background") {
+                    t.bg = c;
+                    t.ink = c;
+                }
+                if let Some(c) = hex("surface") {
+                    t.panel = c;
+                }
+                if let Some(c) = hex("surfaceContainerHigh") {
+                    t.panel2 = c;
+                } else if let Some(c) = hex("surfaceContainer") {
+                    t.panel2 = c;
+                }
+                if let Some(c) = hex("outlineVariant") {
+                    t.border = c;
+                }
+                if let Some(c) = hex("outline") {
+                    t.border_soft = c;
+                    t.faint = c;
+                }
+                if let Some(c) = hex("onSurface") {
+                    t.text = c;
+                    t.white = c;
+                }
+                if let Some(c) = hex("onSurfaceVariant") {
+                    t.dim = c;
+                }
+                if let Some(c) = hex("primary") {
+                    t.accent = c;
+                }
+                if let Some(c) = hex("tertiary") {
+                    t.accent_soft = c;
+                }
+            }
+        }
+        t
+    }
+    fn by_name(name: &str) -> Self {
+        match name {
+            "gruvbox" => Self::gruvbox(),
+            "dracula" => Self::dracula(),
+            "nord" => Self::nord(),
+            "tokyo" => Self::tokyo(),
+            "tokyo-night" => Self::tokyo(),
+            "catppuccin" => Self::catppuccin(),
+            "catppuccin-mocha" => Self::catppuccin(),
+            "solarized" => Self::solarized(),
+            "one-dark" => Self::one_dark(),
+            "matugen" => Self::matugen(),
+            _ => Self::ryoku(),
+        }
+    }
+    fn all() -> Vec<Self> {
+        vec![
+            Self::ryoku(),
+            Self::gruvbox(),
+            Self::dracula(),
+            Self::nord(),
+            Self::tokyo(),
+            Self::catppuccin(),
+            Self::solarized(),
+            Self::one_dark(),
+            Self::matugen(),
+        ]
+    }
+}
+
+fn parse_hex(s: &str) -> Option<u32> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
+    }
+    u32::from_str_radix(h, 16).ok()
+}
+
+fn default_theme_name() -> String {
+    let p = std::env::var("HOME")
+        .map(|h| format!("{h}/.config/ryoku/theme.json"))
+        .unwrap_or_else(|_| "/tmp/theme.json".to_string());
+    if let Ok(s) = std::fs::read_to_string(&p) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
+            if v.get("followWallpaper").and_then(|x| x.as_bool()).unwrap_or(false) {
+                return "matugen".to_string();
+            }
+        }
+    }
+    "ryoku".to_string()
+}
+
+fn current_theme() -> Theme {
+    use std::sync::{LazyLock, Mutex};
+    use std::time::{Duration, Instant, SystemTime};
+    static CACHE: LazyLock<
+        Mutex<(
+            Option<Theme>,
+            Option<SystemTime>,
+            Option<SystemTime>,
+            String,
+            Option<Instant>,
+        )>,
+    > = LazyLock::new(|| Mutex::new((None, None, None, String::new(), None)));
+    let now = Instant::now();
+    let mut g = CACHE.lock().unwrap();
+    // Debounce: only stat files max every 200ms (avoid 20×60 stats/s)
+    if let Some(last) = g.4 {
+        if now.duration_since(last) < Duration::from_millis(200) {
+            if let Some(cached) = &g.0 {
+                return cached.clone();
+            }
+        }
+    }
+    let state_path = state_path();
+    let cache_mtime = state_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok());
+    let colors_path = std::env::var("HOME")
+        .map(|h| format!("{h}/.cache/ryoku/colors.json"))
+        .unwrap_or_else(|_| "/tmp/colors.json".to_string());
+    let colors_mtime = std::fs::metadata(&colors_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    // Fast path: mtime unchanged → return cached without reading file
+    if g.0.is_some() && g.1 == colors_mtime && g.2 == cache_mtime {
+        g.4 = Some(now);
+        return g.0.clone().unwrap();
+    }
+    let name = Persisted::load().theme.unwrap_or_else(default_theme_name);
+    let th = Theme::by_name(&name);
+    g.0 = Some(th.clone());
+    g.1 = colors_mtime;
+    g.2 = cache_mtime;
+    g.3 = name;
+    g.4 = Some(now);
+    th
+}
+
+fn card_with_theme(
+    theme: &Theme,
+    title: &str,
+    children: impl IntoIterator<Item = impl IntoElement>,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .p_4()
+        .rounded_xl()
+        .bg(rgb(theme.panel))
+        .border_1()
+        .border_color(rgb(theme.border))
+        .shadow_sm()
+        .w_full()
+        .flex_1()
+        .min_h(px(0.))
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .w_full()
+                .child(
+                    div()
+                        .text_color(rgb(theme.dim))
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(format!("// {title}_")),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(theme.faint))
+                        .text_xs()
+                        .child("+".to_string()),
+                ),
+        )
+        .children(children)
+}
+
 const MODE_BALANCED: &str = "Balanced";
 const MODE_ENT: &str = "Entertainment";
 const MODE_PERF: &str = "Performance";
 const MODE_CUSTOM: &str = "Custom";
 
-fn mode_curve(name: &str) -> Vec<(i32, u8)> {
-    match name {
-        MODE_QUIET => vec![(35, 40), (50, 50), (65, 60), (78, 70), (88, 85)],
-        MODE_BALANCED => vec![(25, 40), (40, 55), (55, 65), (70, 80), (82, 90)],
-        MODE_PERF => vec![(20, 60), (32, 70), (45, 80), (58, 90), (70, 100)],
-        _ => fan::REFERENCE_CURVE.to_vec(),
-    }
+/// Kurva legacy (daemon mati) — referensi EC-auto untuk semua mode.
+/// Cermin `axiood/src/profile.rs` (normal = REFERENCE_CURVE).
+fn mode_curve(_name: &str) -> Vec<(i32, u8)> {
+    fan::REFERENCE_CURVE.to_vec()
 }
 
 fn mode_desc(name: &str) -> &'static str {
     match name {
-        MODE_QUIET => "hening · kipas kalem",
-        MODE_BALANCED => "harian · seimbang suhu & bising",
-        MODE_ENT => "kasual · kurva referensi",
-        MODE_PERF => "gaming · kurva agresif",
-        _ => "kurva diedit manual (pratinjau)",
+        MODE_BALANCED => "daily · balanced temperature & noise",
+        MODE_ENT => "casual · reference curve+",
+        MODE_PERF => "gaming · aggressive curve",
+        _ => "manually edited curve (preview)",
     }
 }
 
@@ -73,16 +436,18 @@ enum Tab {
     Kipas,
     Keyboard,
     Daya,
+    Settings,
 }
 
 impl Tab {
     fn label(self) -> &'static str {
         match self {
             Tab::Dashboard => "Dashboard",
-            Tab::Performa => "Performa",
-            Tab::Kipas => "Kipas",
+            Tab::Performa => "Performance",
+            Tab::Kipas => "Fans",
             Tab::Keyboard => "Keyboard",
-            Tab::Daya => "Daya",
+            Tab::Daya => "Power",
+            Tab::Settings => "Settings",
         }
     }
 
@@ -93,6 +458,7 @@ impl Tab {
             Tab::Kipas => "ファン",
             Tab::Keyboard => "キーボード",
             Tab::Daya => "電源",
+            Tab::Settings => "設定",
         }
     }
 
@@ -101,29 +467,51 @@ impl Tab {
             Tab::Dashboard | Tab::Performa => "01 MONITOR",
             Tab::Kipas | Tab::Keyboard => "02 CONTROL",
             Tab::Daya => "03 SYSTEM",
+            Tab::Settings => "04 SETTINGS",
         }
     }
 
-    fn desc(self) -> &'static str {
+    fn desc(self, daemon_on: bool) -> &'static str {
         match self {
-            Tab::Dashboard => "Ringkasan live: suhu, kipas, dan daya dalam satu pandang.",
-            Tab::Performa => "Mode performa dan kurva pratinjau kipas.",
-            Tab::Kipas => "Kontrol manual satu-kali langsung (root). Loop kontinu butuh axiood.",
-            Tab::Keyboard => "Backlight keyboard: brightness + warna (butuh quirk DKMS).",
-            Tab::Daya => "Baterai, memori, dan daya paket CPU (RAPL).",
+            Tab::Dashboard => "Live overview: temperature, fans, and power at a glance.",
+            Tab::Performa => {
+                if daemon_on {
+                    "Performance modes via axiood (synced with system power profile)."
+                } else {
+                    "Performance modes + fan curve preview (manual one-shot)."
+                }
+            }
+            Tab::Kipas => {
+                if daemon_on {
+                    "Automatic fan curve is active. Manual control disabled."
+                } else {
+                    "Manual one-shot fan control (requires admin). Service offline."
+                }
+            }
+            Tab::Keyboard => "Keyboard backlight: brightness and color.",
+            Tab::Daya => "Battery, memory, and CPU power.",
+            Tab::Settings => "Appearance, theme, and preferences.",
         }
     }
 
-    fn all() -> [Tab; 5] {
-        [Tab::Dashboard, Tab::Performa, Tab::Kipas, Tab::Keyboard, Tab::Daya]
+    fn all() -> [Tab; 6] {
+        [
+            Tab::Dashboard,
+            Tab::Performa,
+            Tab::Kipas,
+            Tab::Keyboard,
+            Tab::Daya,
+            Tab::Settings,
+        ]
     }
 
     fn from_label(s: &str) -> Self {
         match s {
-            "Performa" => Tab::Performa,
-            "Kipas" => Tab::Kipas,
+            "Performance" | "Performa" => Tab::Performa,
+            "Fans" | "Kipas" => Tab::Kipas,
             "Keyboard" => Tab::Keyboard,
-            "Daya" => Tab::Daya,
+            "Power" | "Daya" => Tab::Daya,
+            "Settings" => Tab::Settings,
             _ => Tab::Dashboard,
         }
     }
@@ -170,6 +558,8 @@ struct SensorData {
     kbd_rgb: Option<(u8, u8, u8)>,
     /// Per-zona (brightness, rgb) sesuai urutan discover (0=kiri).
     kbd_zones: Vec<(u32, (u8, u8, u8))>,
+    /// Snapshot profil dari daemon (None = belum ada hasil poll).
+    profile: Option<profile_client::ProfileState>,
     stamp: String,
 }
 
@@ -178,6 +568,15 @@ struct RootView {
     cpu_model: String,
     data: SensorData,
     mode: String,
+    /// Toggle quiet-fan per mode (efektif hanya bila daemon jalan).
+    quiet_fan: bool,
+    /// `true` = state tampil mengikuti `axiood` (via poll); tulis EC
+    /// langsung nonaktif agar tak rebutan dengan loop daemon.
+    daemon_on: bool,
+    /// Profil PPD mentah terakhir dari daemon (buat pill status).
+    daemon_ppd: String,
+    /// Duty terakhir dari loop daemon (buat kartu KONTROL).
+    daemon_duty: u8,
     curve: Vec<(i32, u8)>,
     fan_manual: bool,
     manual_duty: u8,
@@ -194,6 +593,12 @@ struct RootView {
     custom_rgb: (u8, u8, u8),
     /// Channel slider (0=R,1=G,2=B) yang sedang di-drag.
     drag_rgb: Option<usize>,
+    /// Efek RGB aktif — `static` = diam (legacy), lainnya animasi userspace.
+    kbd_effect: String,
+    /// Stop flag untuk thread efek yang jalan (None = tidak ada).
+    kbd_effect_stop: Option<Arc<AtomicBool>>,
+    /// Theme aktif — persist, support matugen (baca ~/.cache/ryoku/colors.json)
+    theme: Theme,
     tab: Tab,
     notice: Option<String>,
     /// True saat worker tulis EC berjalan.
@@ -208,19 +613,17 @@ struct RootView {
 }
 
 impl RootView {
-    fn new(
-        product: String,
-        cpu_model: String,
-        apply_tx: std::sync::mpsc::Sender<String>,
-    ) -> Self {
+    fn new(product: String, cpu_model: String, apply_tx: std::sync::mpsc::Sender<String>) -> Self {
         // Pulihkan sesi sebelumnya (validasi + clamp, rusak → default).
+        // Migrasi: "Quiet" lama → Balanced + quiet-fan on.
         let saved = Persisted::load();
-        let mode = saved
-            .mode
-            .filter(|m| {
-                [MODE_QUIET, MODE_BALANCED, MODE_ENT, MODE_PERF, MODE_CUSTOM].contains(&m.as_str())
-            })
-            .unwrap_or_else(|| MODE_BALANCED.to_string());
+        let (mode, quiet_fan) = match saved.mode {
+            Some(m) if m == "Quiet" || m == "power-saver" => (MODE_BALANCED.to_string(), true),
+            Some(m) if [MODE_BALANCED, MODE_ENT, MODE_PERF, MODE_CUSTOM].contains(&m.as_str()) => {
+                (m, saved.quiet_fan.unwrap_or(false))
+            }
+            _ => (MODE_BALANCED.to_string(), saved.quiet_fan.unwrap_or(false)),
+        };
         let mut curve: Vec<(i32, u8)> = saved
             .curve
             .map(|pts| {
@@ -245,6 +648,10 @@ impl RootView {
             cpu_model,
             data: SensorData::default(),
             mode: mode.clone(),
+            quiet_fan,
+            daemon_on: false,
+            daemon_ppd: "-".to_string(),
+            daemon_duty: 0,
             curve,
             fan_manual: saved.fan_manual.unwrap_or(false),
             manual_duty: saved
@@ -257,11 +664,24 @@ impl RootView {
             show_rgb_popup: false,
             custom_rgb: saved.custom_rgb.unwrap_or((255, 255, 255)),
             drag_rgb: None,
-            tab: saved.tab.map(|t| Tab::from_label(&t)).unwrap_or(Tab::Dashboard),
+            // Efek: default static (warna diam) — migrasi dari tanpa-field → static.
+            kbd_effect: saved
+                .kbd_effect
+                .filter(|e| kbd_effect::KbdEffect::parse(e).is_some())
+                .unwrap_or_else(|| "static".to_string()),
+            kbd_effect_stop: None,
+            theme: {
+                let name = saved.theme.unwrap_or_else(default_theme_name);
+                Theme::by_name(&name)
+            },
+            tab: saved
+                .tab
+                .map(|t| Tab::from_label(&t))
+                .unwrap_or(Tab::Dashboard),
             notice: if fan_ctrl::is_root() {
                 None
             } else {
-                Some("bukan root: tulis EC via pkexec (satu prompt).".to_string())
+                Some("Admin access required for hardware control.".to_string())
             },
             apply_busy: false,
             apply_tx,
@@ -284,7 +704,9 @@ impl RootView {
         if self.fan_manual {
             Some(self.manual_duty)
         } else {
-            self.data.max_temp_c.map(|t| fan::curve_duty(&self.curve, t))
+            self.data
+                .max_temp_c
+                .map(|t| fan::curve_duty(&self.curve, t))
         }
     }
 
@@ -303,7 +725,15 @@ impl RootView {
 
     /// Kurva selesai diedit (drag/tombol) → langsung jadi acuan hidup:
     /// ikut kurva + tulis snapshot satu-kali. Tidak perlu TERAPKAN.
+    /// NONAKTIF saat daemon jalan (kurva milik axiood).
     fn curve_live(&mut self, cx: &mut Context<Self>, why: &str) {
+        if self.daemon_on {
+            let _ = self
+                .apply_tx
+                .send("axiood aktif: kurva diatur daemon (mode + quiet-fan).".to_string());
+            cx.notify();
+            return;
+        }
         let snap = self
             .data
             .max_temp_c
@@ -335,12 +765,15 @@ impl RootView {
     fn persist(&self) {
         let p = Persisted {
             mode: Some(self.mode.clone()),
+            quiet_fan: Some(self.quiet_fan),
             curve: Some(self.curve.clone()),
             fan_manual: Some(self.fan_manual),
             manual_duty: Some(self.manual_duty),
             mode_auto: Some(self.mode_auto),
             kbd_zone_sel: self.kbd_zone_sel,
             custom_rgb: Some(self.custom_rgb),
+            kbd_effect: Some(self.kbd_effect.clone()),
+            theme: Some(self.theme.name.to_string()),
             tab: Some(self.tab.label().to_string()),
         };
         let path = match state_path() {
@@ -355,10 +788,55 @@ impl RootView {
         }
     }
 
+    /// Minta daemon ganti profil di thread latar (hasil → toast).
+    /// Optimistic: panggil set `mode` dulu di call-site; poll mengoreksi.
+    fn spawn_profile_set(&mut self, cx: &mut Context<Self>, name: String) {
+        self.notice = Some(format!("mode {name}…"));
+        let tx = self.apply_tx.clone();
+        std::thread::spawn(move || {
+            let msg = match zbus::blocking::Connection::system() {
+                Ok(conn) => match profile_client::set_profile(&conn, &name) {
+                    Ok(label) => format!("mode → {label} (via axiood, PPD sinkron)"),
+                    Err(e) => format!("mode {name}: gagal: {e}"),
+                },
+                Err(e) => format!("mode {name}: gagal: D-Bus tak terjangkau ({e})"),
+            };
+            let _ = tx.send(msg);
+        });
+        cx.notify();
+    }
+
+    /// Minta daemon toggle quiet-fan di thread latar (hasil → toast).
+    fn spawn_quiet_toggle(&mut self, cx: &mut Context<Self>) {
+        let want = !self.quiet_fan;
+        self.quiet_fan = want; // optimistic; poll mengoreksi
+        self.notice = Some("quiet-fan…".to_string());
+        let tx = self.apply_tx.clone();
+        std::thread::spawn(move || {
+            let msg = match zbus::blocking::Connection::system() {
+                Ok(conn) => match profile_client::set_quiet_fan(&conn, want) {
+                    Ok(label) => format!("{label} (via axiood)"),
+                    Err(e) => format!("quiet-fan: gagal: {e}"),
+                },
+                Err(e) => format!("quiet-fan: gagal: D-Bus tak terjangkau ({e})"),
+            };
+            let _ = tx.send(msg);
+        });
+        cx.notify();
+    }
+
     /// Tulis EC satu-kali di thread latar: langsung via `fan_ctrl`;
     /// kalau proses bukan root (`NotRoot`), otomatis fallback pkexec.
     /// Hasil ke toast + notice pendek.
+    /// NONAKTIF saat daemon jalan (biar tak rebutan dengan loop axiood).
     fn spawn_fan_write(&mut self, cx: &mut Context<Self>, write: FanWrite, label: String) {
+        if self.daemon_on {
+            let _ = self.apply_tx.send(
+                "axiood aktif: kontrol langsung nonaktif — pakai mode + quiet-fan.".to_string(),
+            );
+            cx.notify();
+            return;
+        }
         if self.apply_busy {
             return;
         }
@@ -415,6 +893,9 @@ struct Toast {
 struct Persisted {
     #[serde(default)]
     mode: Option<String>,
+    /// Toggle quiet-fan per mode.
+    #[serde(default)]
+    quiet_fan: Option<bool>,
     #[serde(default)]
     curve: Option<Vec<(i32, u8)>>,
     #[serde(default)]
@@ -429,6 +910,10 @@ struct Persisted {
     #[serde(default)]
     custom_rgb: Option<(u8, u8, u8)>,
     #[serde(default)]
+    kbd_effect: Option<String>,
+    #[serde(default)]
+    theme: Option<String>,
+    #[serde(default)]
     tab: Option<String>,
 }
 
@@ -436,7 +921,11 @@ fn state_path() -> Option<std::path::PathBuf> {
     let base = std::env::var("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .ok()
-        .or_else(|| std::env::var("HOME").ok().map(|h| std::path::PathBuf::from(h).join(".config")))?;
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
     Some(base.join("axioo-control-center").join("state.json"))
 }
 
@@ -461,7 +950,9 @@ impl Persisted {
 /// Dipakai HANYA untuk fallback pkexec saat proses GUI bukan root.
 fn axioo_ctl_path() -> String {
     for p in [
-        std::env::var("HOME").ok().map(|h| format!("{h}/.local/bin/axioo-ctl")),
+        std::env::var("HOME")
+            .ok()
+            .map(|h| format!("{h}/.local/bin/axioo-ctl")),
         Some("/usr/local/bin/axioo-ctl".to_string()),
         Some("/usr/bin/axioo-ctl".to_string()),
     ]
@@ -478,8 +969,7 @@ fn axioo_ctl_path() -> String {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let s = dir.to_string_lossy();
-            let in_appimage_mount =
-                s.starts_with("/tmp/.mount_") || s.starts_with("/proc/");
+            let in_appimage_mount = s.starts_with("/tmp/.mount_") || s.starts_with("/proc/");
             if !in_appimage_mount {
                 let sib = dir.join("axioo-ctl");
                 if sib.exists() {
@@ -638,9 +1128,21 @@ fn btn(
     cx: &mut Context<RootView>,
     f: impl Fn(&mut RootView, &ClickEvent, &mut Window, &mut Context<RootView>) + 'static,
 ) -> Stateful<Div> {
-    let (bg, fg, bd) = if primary { (WHITE, INK, WHITE) } else { (PANEL, TEXT, BORDER) };
-    let hover_bg = if primary { darken(WHITE, 0.12) } else { lighten(PANEL, 0.35) };
-    let press_bg = if primary { darken(WHITE, 0.25) } else { darken(PANEL, 0.3) };
+    let (bg, fg, bd) = if primary {
+        (current_theme().white, current_theme().ink, current_theme().white)
+    } else {
+        (current_theme().panel, current_theme().text, current_theme().border)
+    };
+    let hover_bg = if primary {
+        darken(current_theme().white, 0.12)
+    } else {
+        lighten(current_theme().panel, 0.35)
+    };
+    let press_bg = if primary {
+        darken(current_theme().white, 0.25)
+    } else {
+        darken(current_theme().panel, 0.3)
+    };
     div()
         .id(SharedString::from(id.to_string()))
         .px_3()
@@ -648,7 +1150,7 @@ fn btn(
         .rounded_md()
         .bg(rgb(bg))
         .border_1()
-        .border_color(rgb(if primary { bd } else { lighten(BORDER, 0.3) }))
+        .border_color(rgb(if primary { bd } else { lighten(current_theme().border, 0.3) }))
         .text_color(rgb(fg))
         .text_sm()
         .whitespace_nowrap()
@@ -672,16 +1174,16 @@ fn btn_sm(
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgb(PANEL))
+        .bg(rgb(current_theme().panel))
         .border_1()
-        .border_color(rgb(lighten(BORDER, 0.3)))
-        .text_color(rgb(TEXT))
+        .border_color(rgb(lighten(current_theme().border, 0.3)))
+        .text_color(rgb(current_theme().text))
         .text_xs()
         .whitespace_nowrap()
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(lighten(PANEL, 0.35))))
-        .active(move |s| s.bg(rgb(darken(PANEL, 0.3))))
+        .hover(move |s| s.bg(rgb(lighten(current_theme().panel, 0.35))))
+        .active(move |s| s.bg(rgb(darken(current_theme().panel, 0.3))))
         .child(label.to_string())
         .on_click(cx.listener(f))
 }
@@ -697,10 +1199,10 @@ fn status_pill(label: String, active: bool) -> Div {
         .px_2()
         .py_1()
         .rounded_md()
-        .bg(rgb(PANEL2))
+        .bg(rgb(current_theme().panel2))
         .border_1()
-        .border_color(rgb(BORDER))
-        .text_color(rgb(if active { TEXT } else { DIM }))
+        .border_color(rgb(current_theme().border))
+        .text_color(rgb(if active { current_theme().text } else { current_theme().dim }))
         .text_xs()
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .truncate()
@@ -719,17 +1221,18 @@ fn nav_item(
         .id(SharedString::from(format!("nav-{}", tab.label())))
         .w_full()
         .px_3()
-        .py_1()
-        .rounded_md()
-        .bg(rgb(if selected { WHITE } else { PANEL }))
-        .text_color(rgb(if selected { INK } else { TEXT }))
+        .py_2()
+        .rounded_lg()
+        .bg(rgb(if selected { current_theme().accent } else { current_theme().panel }))
+        .text_color(rgb(if selected { current_theme().white } else { current_theme().text }))
         .font_weight(gpui::FontWeight::SEMIBOLD)
+        .shadow_sm()
         .cursor_pointer()
         .hover(move |s| {
             s.bg(rgb(if selected {
-                darken(WHITE, 0.1)
+                lighten(current_theme().accent, 0.15)
             } else {
-                lighten(PANEL, 0.4)
+                lighten(current_theme().panel, 0.25)
             }))
         })
         .child(
@@ -739,17 +1242,22 @@ fn nav_item(
                 .items_center()
                 .justify_between()
                 .w_full()
+                .child(div().text_sm().child(format!(
+                    "{} {}",
+                    if selected { "//" } else { "  " },
+                    tab.label()
+                )))
                 .child(
                     div()
+                        .text_color(rgb(if selected { current_theme().white } else { current_theme().faint }))
                         .text_sm()
-                        .child(format!("{} {}", if selected { "//" } else { "  " }, tab.label())),
-                )
-                .child(div().text_color(rgb(if selected { INK } else { FAINT })).text_sm().child(tab.jp().to_string())),
+                        .child(tab.jp().to_string()),
+                ),
         )
         .on_click(cx.listener(f))
 }
 
-/// Opsi segmen (AUTO/MANUAL, Calm/Rich): putih saat aktif.
+/// Opsi segmen (AUTO/MANUAL, Calm/Rich): accent saat aktif.
 fn seg_opt(
     id: &str,
     label: &str,
@@ -763,19 +1271,19 @@ fn seg_opt(
         .px_3()
         .py_1()
         .rounded_md()
-        .bg(rgb(if selected { WHITE } else { PANEL }))
-        .text_color(rgb(if selected { INK } else { DIM }))
+        .bg(rgb(if selected { current_theme().white } else { current_theme().panel }))
+        .text_color(rgb(if selected { current_theme().ink } else { current_theme().dim }))
         .text_sm()
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .cursor_pointer()
         .hover(move |s| {
             s.bg(rgb(if selected {
-                darken(WHITE, 0.1)
+                darken(current_theme().white, 0.1)
             } else {
-                lighten(PANEL, 0.4)
+                lighten(current_theme().panel, 0.4)
             }))
         })
-        .active(move |s| s.bg(rgb(if selected { darken(WHITE, 0.2) } else { PANEL })))
+        .active(move |s| s.bg(rgb(if selected { darken(current_theme().white, 0.2) } else { current_theme().panel })))
         .child(
             div()
                 .w_full()
@@ -784,6 +1292,124 @@ fn seg_opt(
                 .justify_center()
                 .child(label.to_string()),
         )
+        .on_click(cx.listener(f))
+}
+
+/// Ikon Lucide (SVG 24px, tint eksplisit). Urutan cari:
+/// `/usr/share/axioo-control-center/icons/` (instal sistem) lalu bundle
+/// build (`OUT_DIR/icons/`). Hilang → glyph fallback (tak pernah kosong).
+fn icon(name: &str, size: f32, color: u32, fallback: &str) -> AnyElement {
+    let sys = format!("/usr/share/axioo-control-center/icons/{name}.svg");
+    let bundled = format!("{}/icons/{name}.svg", env!("OUT_DIR"));
+    for p in [&sys, &bundled] {
+        if std::path::Path::new(p).is_file() {
+            return svg()
+                .path(SharedString::from(p.clone()))
+                .w(px(size))
+                .h(px(size))
+                .flex_shrink_0()
+                .text_color(rgb(color))
+                .into_any_element();
+        }
+    }
+    div()
+        .text_color(rgb(color))
+        .child(fallback.to_string())
+        .into_any_element()
+}
+
+/// Opsi segmen dengan ikon Lucide + label (varian [`seg_opt`]).
+#[allow(clippy::too_many_arguments)]
+fn seg_icon(
+    id: &str,
+    icon_name: &str,
+    icon_fallback: &str,
+    label: &str,
+    selected: bool,
+    cx: &mut Context<RootView>,
+    f: impl Fn(&mut RootView, &ClickEvent, &mut Window, &mut Context<RootView>) + 'static,
+) -> Stateful<Div> {
+    let ink = if selected { current_theme().ink } else { current_theme().dim };
+    div()
+        .id(SharedString::from(id.to_string()))
+        .flex_1()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .bg(rgb(if selected { current_theme().white } else { current_theme().panel }))
+        .text_color(rgb(ink))
+        .text_sm()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .hover(move |s| {
+            s.bg(rgb(if selected {
+                darken(current_theme().white, 0.1)
+            } else {
+                lighten(current_theme().panel, 0.4)
+            }))
+        })
+        .active(move |s| s.bg(rgb(if selected { darken(current_theme().white, 0.2) } else { current_theme().panel })))
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .child(icon(icon_name, 14., ink, icon_fallback))
+                .child(label.to_string()),
+        )
+        .on_click(cx.listener(f))
+}
+
+/// Tombol kotak mono dengan ikon Lucide + label (varian [`btn`]).
+#[allow(clippy::too_many_arguments)]
+fn btn_icon(
+    id: &str,
+    icon_name: &str,
+    icon_fallback: &str,
+    label: &str,
+    primary: bool,
+    cx: &mut Context<RootView>,
+    f: impl Fn(&mut RootView, &ClickEvent, &mut Window, &mut Context<RootView>) + 'static,
+) -> Stateful<Div> {
+    let (bg, fg, bd) = if primary {
+        (current_theme().white, current_theme().ink, current_theme().white)
+    } else {
+        (current_theme().panel, current_theme().text, current_theme().border)
+    };
+    let hover_bg = if primary {
+        darken(current_theme().white, 0.12)
+    } else {
+        lighten(current_theme().panel, 0.35)
+    };
+    let press_bg = if primary {
+        darken(current_theme().white, 0.25)
+    } else {
+        darken(current_theme().panel, 0.3)
+    };
+    div()
+        .id(SharedString::from(id.to_string()))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .bg(rgb(bg))
+        .border_1()
+        .border_color(rgb(if primary { bd } else { lighten(current_theme().border, 0.3) }))
+        .text_color(rgb(fg))
+        .text_sm()
+        .whitespace_nowrap()
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .cursor_pointer()
+        .hover(move |s| s.bg(rgb(hover_bg)))
+        .active(move |s| s.bg(rgb(press_bg)))
+        .child(icon(icon_name, 14., fg, icon_fallback))
+        .child(label.to_string())
         .on_click(cx.listener(f))
 }
 
@@ -804,12 +1430,12 @@ fn mode_card(
         .px_3()
         .py_2()
         .rounded_md()
-        .bg(rgb(if selected { PANEL2 } else { PANEL }))
+        .bg(rgb(if selected { current_theme().panel2 } else { current_theme().panel }))
         .border_1()
-        .border_color(rgb(if selected { WHITE } else { BORDER }))
+        .border_color(rgb(if selected { current_theme().white } else { current_theme().border }))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(lighten(PANEL2, 0.15))))
-        .active(move |s| s.bg(rgb(darken(PANEL2, 0.2))))
+        .hover(move |s| s.bg(rgb(lighten(current_theme().panel2, 0.15))))
+        .active(move |s| s.bg(rgb(darken(current_theme().panel2, 0.2))))
         .child(
             div()
                 .flex()
@@ -819,56 +1445,28 @@ fn mode_card(
                 .w_full()
                 .child(
                     div()
-                        .text_color(rgb(if selected { WHITE } else { TEXT }))
+                        .text_color(rgb(if selected { current_theme().white } else { current_theme().text }))
                         .text_sm()
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(name.to_string()),
                 )
                 .child(
                     div()
-                        .text_color(rgb(if selected { WHITE } else { FAINT }))
+                        .text_color(rgb(if selected { current_theme().white } else { current_theme().faint }))
                         .text_xs()
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(if selected { "● AKTIF" } else { "○" }.to_string()),
                 ),
         )
-        .child(div().text_color(rgb(DIM)).text_xs().child(hint.to_string()))
+        .child(div().text_color(rgb(current_theme().dim)).text_xs().child(hint.to_string()))
         .on_click(cx.listener(f))
 }
 
 /// Panel kartu: hairline border + header `// TITLE_` + `+`.
-/// `w_full` + `overflow_hidden` agar teks panjang tidak meluber keluar
-/// kartu dan baris kartu selalu sama tinggi (kartu mengisi wrapper kolom).
+/// Delegates to themed version via current persisted theme (matugen aware).
 fn card(title: &str, children: impl IntoIterator<Item = impl IntoElement>) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .p_3()
-        .rounded_md()
-        .bg(rgb(PANEL))
-        .border_1()
-        .border_color(rgb(BORDER))
-        .w_full()
-        .flex_1()
-        .overflow_hidden()
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .w_full()
-                .child(
-                    div()
-                        .text_color(rgb(DIM))
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .child(format!("// {title}_")),
-                )
-                .child(div().text_color(rgb(FAINT)).text_xs().child("+".to_string())),
-        )
-        .children(children)
+    let th = current_theme();
+    card_with_theme(&th, title, children)
 }
 
 /// Baris `label .... value`. Value dipotong ellipsis agar label dan
@@ -884,7 +1482,7 @@ fn kv(tag: &str, val: String) -> Div {
         .child(
             div()
                 .flex_shrink_0()
-                .text_color(rgb(DIM))
+                .text_color(rgb(current_theme().dim))
                 .text_sm()
                 .child(tag.to_string()),
         )
@@ -892,7 +1490,7 @@ fn kv(tag: &str, val: String) -> Div {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_color(rgb(TEXT))
+                .text_color(rgb(current_theme().text))
                 .text_sm()
                 .text_right()
                 .truncate()
@@ -913,25 +1511,32 @@ fn segbar(pct: Option<f64>) -> Div {
                 .max_w(px(12.))
                 .h(px(10.))
                 .rounded_sm()
-                .bg(rgb(if i < lit { TEXT } else { BORDER })),
+                .bg(rgb(if i < lit { current_theme().text } else { current_theme().border })),
         );
     }
-    div().flex().flex_row().items_center().gap_2().w_full().child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(2.))
-            .flex_1()
-            .min_w(px(0.))
-            .children(segs),
-    ).child(
-        div()
-            .flex_shrink_0()
-            .text_color(rgb(TEXT))
-            .text_sm()
-            .child(pct.map_or("-".to_string(), |v| format!("{v:.0}%"))),
-    )
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(2.))
+                .flex_1()
+                .min_w(px(0.))
+                .children(segs),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(current_theme().text))
+                .text_sm()
+                .child(pct.map_or("-".to_string(), |v| format!("{v:.0}%"))),
+        )
 }
 
 fn hero_number(big: String, sub: String) -> Div {
@@ -945,7 +1550,7 @@ fn hero_number(big: String, sub: String) -> Div {
         .child(
             div()
                 .flex_shrink_0()
-                .text_color(rgb(WHITE))
+                .text_color(rgb(current_theme().white))
                 .text_size(px(36.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(big),
@@ -954,7 +1559,7 @@ fn hero_number(big: String, sub: String) -> Div {
             div()
                 .flex_1()
                 .min_w(px(0.))
-                .text_color(rgb(DIM))
+                .text_color(rgb(current_theme().dim))
                 .text_sm()
                 .text_right()
                 .truncate()
@@ -966,14 +1571,39 @@ fn hero_number(big: String, sub: String) -> Div {
 /// (bar tetap proporsional, sisa ruang terbagi jadi celah) — tak pernah
 /// terpotong di tepi seperti sebelumnya.
 fn barcode() -> Div {
-    let units = [3., 1., 2., 1., 1., 4., 1., 2., 1., 3., 1., 1., 2., 4., 1., 2., 1., 1., 3., 2., 1., 4., 1., 2.];
+    let units = [
+        3., 1., 2., 1., 1., 4., 1., 2., 1., 3., 1., 1., 2., 4., 1., 2., 1., 1., 3., 2., 1., 4., 1.,
+        2.,
+    ];
     let mut bars = Vec::with_capacity(units.len());
     for (i, u) in units.iter().enumerate() {
-        bars.push(div().w(px(u * 2.0)).h(px(24.)).bg(rgb(if i % 4 == 3 { FAINT } else { TEXT })));
+        bars.push(
+            div()
+                .w(px(u * 2.0))
+                .h(px(24.))
+                .bg(rgb(if i % 4 == 3 { current_theme().faint } else { current_theme().text })),
+        );
     }
-    div().flex().flex_col().gap_1().w_full().child(
-        div().flex().flex_row().items_end().justify_between().w_full().children(bars),
-    ).child(div().text_color(rgb(FAINT)).text_xs().child("AXIOO HUB".to_string()))
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .w_full()
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_end()
+                .justify_between()
+                .w_full()
+                .children(bars),
+        )
+        .child(
+            div()
+                .text_color(rgb(current_theme().faint))
+                .text_xs()
+                .child("AXIOO HUB".to_string()),
+        )
 }
 
 /// Padding dalam chart kurva (px logis); dipakai paint + hit-test drag.
@@ -1065,7 +1695,7 @@ fn curve_chart(
                         grid.line_to(point(px(ox + w - CHART_PAD), px(y_of(d))));
                     }
                     if let Ok(p) = grid.build() {
-                        window.paint_path(p, rgb(BORDER));
+                        window.paint_path(p, rgb(current_theme().border));
                     }
                     let mut sorted = pts.clone();
                     sorted.sort_by_key(|&(t, _)| t);
@@ -1078,10 +1708,7 @@ fn curve_chart(
                     // Arsiran di bawah kurva.
                     let yb = y_of(40.0);
                     let mut poly = Vec::with_capacity(sorted.len() + 2);
-                    poly.push(point(
-                        px(x_of(sorted[0].0.clamp(20, 100) as f32)),
-                        px(yb),
-                    ));
+                    poly.push(point(px(x_of(sorted[0].0.clamp(20, 100) as f32)), px(yb)));
                     for (t, d) in sorted.iter() {
                         poly.push(point(
                             px(x_of((*t).clamp(20, 100) as f32)),
@@ -1099,12 +1726,12 @@ fn curve_chart(
                     }
                     // Garis kurva tebal.
                     let mut line = PathBuilder::stroke(px(3.0));
-                    line.move_to(poly[1].clone());
+                    line.move_to(poly[1]);
                     for q in poly.iter().skip(2).take(sorted.len().saturating_sub(1)) {
-                        line.line_to(q.clone());
+                        line.line_to(*q);
                     }
                     if let Ok(p) = line.build() {
-                        window.paint_path(p, rgb(WHITE));
+                        window.paint_path(p, rgb(current_theme().white));
                     }
                     // Marker live: garis + dot tepat di kurva (interpolasi).
                     if let Some(lt) = live {
@@ -1114,7 +1741,7 @@ fn curve_chart(
                         m.move_to(point(px(lx), px(oy + 4.0)));
                         m.line_to(point(px(lx), px(oy + h - 4.0)));
                         if let Ok(p) = m.build() {
-                            window.paint_path(p, rgb(DIM));
+                            window.paint_path(p, rgb(current_theme().dim));
                         }
                         let ld = chart_duty_at(&sorted, lt.clamp(20, 100));
                         let ly = y_of(ld as f32);
@@ -1130,7 +1757,7 @@ fn curve_chart(
                             true,
                         );
                         if let Ok(p) = dot.build() {
-                            window.paint_path(p, rgb(WHITE));
+                            window.paint_path(p, rgb(current_theme().white));
                         }
                     }
                     // Titik: besar; yang sedang di-drag lebih besar.
@@ -1150,7 +1777,7 @@ fn curve_chart(
                             true,
                         );
                         if let Ok(p) = dot.build() {
-                            window.paint_path(p, rgb(WHITE));
+                            window.paint_path(p, rgb(current_theme().white));
                         }
                     }
                 },
@@ -1161,6 +1788,10 @@ fn curve_chart(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |v, ev: &MouseDownEvent, _window, cx| {
+                // Kurva milik axiood saat daemon jalan — drag dikunci.
+                if v.daemon_on {
+                    return;
+                }
                 let b = match cell_down.get() {
                     Some(b) => b,
                     None => return,
@@ -1176,7 +1807,7 @@ fn curve_chart(
                 for (i, (t, d)) in v.curve.iter().enumerate() {
                     let (qx, qy) = chart_data_to_xy(*t, *d, w, h);
                     let dist = ((lx - qx).powi(2) + (ly - qy).powi(2)).sqrt();
-                    if dist < 24.0 && best.map_or(true, |(_, bd)| dist < bd) {
+                    if dist < 24.0 && best.is_none_or(|(_, bd)| dist < bd) {
                         best = Some((i, dist));
                     }
                 }
@@ -1206,7 +1837,11 @@ fn curve_chart(
             let n = v.curve.len();
             let lo = if i > 0 { v.curve[i - 1].0 + 2 } else { 20 };
             let hi = if i + 1 < n { v.curve[i + 1].0 - 2 } else { 100 };
-            let t = if hi >= lo { t.clamp(lo, hi) } else { v.curve[i].0 };
+            let t = if hi >= lo {
+                t.clamp(lo, hi)
+            } else {
+                v.curve[i].0
+            };
             if let Some(p) = v.curve.get_mut(i) {
                 p.0 = t;
                 p.1 = d;
@@ -1237,8 +1872,8 @@ fn edit_temp(v: &mut RootView, i: usize, delta: i32) {
 
 fn edit_duty(v: &mut RootView, i: usize, delta: i16) {
     if let Some(p) = v.curve.get_mut(i) {
-        p.1 = (p.1 as i16 + delta)
-            .clamp(fan::MIN_FAN_DUTY_PCT as i16, fan::MAX_FAN_DUTY_PCT as i16) as u8;
+        p.1 = (p.1 as i16 + delta).clamp(fan::MIN_FAN_DUTY_PCT as i16, fan::MAX_FAN_DUTY_PCT as i16)
+            as u8;
     }
     v.mark_custom();
 }
@@ -1249,24 +1884,33 @@ impl RootView {
     fn mode_cards(&mut self, cx: &mut Context<Self>) -> Div {
         let mut row: Vec<Stateful<Div>> = Vec::new();
         for (m, hint) in [
-            (MODE_QUIET, "hening · duty rendah"),
             (MODE_BALANCED, "harian · seimbang"),
-            (MODE_ENT, "kasual · referensi"),
+            (MODE_ENT, "kasual · referensi+"),
             (MODE_PERF, "gaming · agresif"),
         ] {
             let sel = self.mode == m;
             let name = m.to_string();
             row.push(mode_card(m, hint, sel, cx, move |v, _, _, cx| {
-                // Klik mode = LANGSUNG tulis EC satu-kali (snapshot:
-                // duty dihitung dari suhu CPU saat ini + kurva mode tsb).
-                // Loop tracking kontinu tetap milik axiood di masa depan.
+                if v.daemon_on {
+                    // Daemon pandu: SetProfile, tampilan ikut via poll
+                    // (yang juga membawa perubahan dari PPD luar).
+                    v.mode = name.clone(); // optimistic; poll mengoreksi
+                    v.spawn_profile_set(cx, name.clone());
+                    cx.notify();
+                    return;
+                }
+                // Legacy (daemon mati): LANGSUNG tulis EC satu-kali
+                // (snapshot: duty dari suhu saat ini + kurva mode tsb).
                 let curve = mode_curve(&name);
                 let snapshot = v
                     .data
                     .max_temp_c
                     .map(|t| fan::curve_duty(&curve, t))
                     .unwrap_or_else(|| {
-                        curve.first().map(|(_, d)| *d).unwrap_or(fan::MIN_FAN_DUTY_PCT)
+                        curve
+                            .first()
+                            .map(|(_, d)| *d)
+                            .unwrap_or(fan::MIN_FAN_DUTY_PCT)
                     });
                 v.mode = name.clone();
                 v.curve = curve;
@@ -1288,16 +1932,32 @@ impl RootView {
                 cx.notify();
             }));
         }
-        let status = format!("● MODE AKTIF: {} — {}", self.mode.to_uppercase(), mode_desc(&self.mode));
+        let qtag = if self.quiet_fan { " + quiet" } else { "" };
+        let status = if self.daemon_on {
+            format!(
+                "● ACTIVE: {}{} — {} · via service (PPD {})",
+                self.mode.to_uppercase(),
+                qtag,
+                mode_desc(&self.mode),
+                self.daemon_ppd
+            )
+        } else {
+            format!(
+                "● ACTIVE: {} — {} · manual (service offline · PPD {})",
+                self.mode.to_uppercase(),
+                mode_desc(&self.mode),
+                self.daemon_ppd
+            )
+        };
         div()
             .flex()
             .flex_col()
             .gap_2()
             .p_3()
             .rounded_md()
-            .bg(rgb(PANEL))
+            .bg(rgb(current_theme().panel))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(current_theme().border))
             .child(
                 div()
                     .flex()
@@ -1307,7 +1967,7 @@ impl RootView {
                     .w_full()
                     .child(
                         div()
-                            .text_color(rgb(DIM))
+                            .text_color(rgb(current_theme().dim))
                             .text_xs()
                             .font_weight(gpui::FontWeight::BOLD)
                             .child("// MODE_".to_string()),
@@ -1316,7 +1976,7 @@ impl RootView {
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .text_color(rgb(WHITE))
+                            .text_color(rgb(current_theme().white))
                             .text_sm()
                             .font_weight(gpui::FontWeight::BOLD)
                             .truncate()
@@ -1324,20 +1984,77 @@ impl RootView {
                     ),
             )
             .child(div().flex().flex_row().gap_2().w_full().children(row))
+            .child(self.quiet_row(cx))
             .child(
                 div()
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(current_theme().faint))
                     .text_xs()
-                    .child("Klik mode = langsung tulis EC satu-kali (duty dari suhu saat ini). Tracking kurva kontinu butuh axiood.".to_string()),
+                    .child(if self.daemon_on {
+                        "Click a mode to switch — synced with system power profile.".to_string()
+                    } else {
+                        "Service offline: mode click writes one-shot (current temperature)."
+                            .to_string()
+                    }),
             )
+    }
+
+    /// Quiet-fan toggle per mode (needs service).
+    fn quiet_row(&mut self, cx: &mut Context<Self>) -> Div {
+        if !self.daemon_on {
+            return div()
+                .text_color(rgb(current_theme().faint))
+                .text_xs()
+                .child("Quiet fan requires the background service.".to_string());
+        }
+        let q = self.quiet_fan;
+        div().flex().flex_row().gap_2().w_full().child(btn_icon(
+            "quiet-toggle",
+            "volume-x",
+            "○",
+            if q { "quiet-fan: ON" } else { "quiet-fan: off" },
+            q,
+            cx,
+            |v, _, _, cx| {
+                v.spawn_quiet_toggle(cx);
+            },
+        ))
     }
 
     /// Detail mode aktif (tab Performa): Auto = snapshot kurva ditulis
     /// satu-kali dari suhu saat ini; Statis = duty tetap pilihan sendiri
     /// via stepper. Semua aksi langsung tulis EC (tanpa pkexec).
+    /// Saat daemon jalan: tampil saja (milik axiood), tanpa tombol tulis.
     fn mode_detail_card(&mut self, cx: &mut Context<Self>) -> Div {
+        if self.daemon_on {
+            let qtag = if self.quiet_fan { "ON" } else { "off" };
+            let temp_txt = self
+                .data
+                .max_temp_c
+                .map_or("suhu —".to_string(), |t| format!("{t}°C"));
+            let snapshot = self
+                .data
+                .max_temp_c
+                .map(|t| fan::curve_duty(&self.curve, t))
+                .map_or("-".to_string(), |d| format!("{d}%"));
+            return card(
+                &format!("MODE {}", self.mode.to_uppercase()),
+                [
+                    kv("PROFIL", self.mode.clone()),
+                    kv("QUIET-FAN", qtag.to_string()),
+                    kv("PPD", self.daemon_ppd.clone()),
+                    kv("DUTY DAEMON", format!("{}%", self.daemon_duty)),
+                    kv("SNAPSHOT", format!("{temp_txt} → {snapshot}")),
+                    div().text_color(rgb(current_theme().faint)).text_xs().child(
+                        "Diatur axiood (loop kontinu + sinkron PPD). Ubah via kartu mode / quiet-fan."
+                            .to_string(),
+                    ),
+                ],
+            );
+        }
         let ec_sel = !self.fan_manual;
         let kurva_sel = self.fan_manual && self.mode_auto;
+        let quiet_sel =
+            self.fan_manual && !self.mode_auto && self.manual_duty == fan::MIN_FAN_DUTY_PCT;
         let duty_txt = format!("{}%", self.manual_duty);
         let temp_txt = self
             .data
@@ -1351,25 +2068,23 @@ impl RootView {
         let info = if ec_sel {
             "EC firmware mengatur penuh — kurva tidak aktif".to_string()
         } else if kurva_sel {
-            format!("snapshot {temp_txt} → {snapshot}% · kurva {} (kontinu butuh axiood)", self.mode)
+            format!(
+                "snapshot {temp_txt} → {snapshot}% · kurva {} (kontinu butuh axiood)",
+                self.mode
+            )
         } else {
             "duty tetap — tidak mengikuti suhu".to_string()
         };
         let duty_row: Div = if ec_sel {
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .text_color(rgb(DIM))
-                        .text_sm()
-                        .truncate()
-                        .child(info),
-                )
+            div().flex().flex_row().items_center().w_full().child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_color(rgb(current_theme().dim))
+                    .text_sm()
+                    .truncate()
+                    .child(info),
+            )
         } else if kurva_sel {
             div()
                 .flex()
@@ -1382,7 +2097,7 @@ impl RootView {
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_color(rgb(DIM))
+                        .text_color(rgb(current_theme().dim))
                         .text_sm()
                         .truncate()
                         .child(info),
@@ -1390,7 +2105,7 @@ impl RootView {
                 .child(
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(WHITE))
+                        .text_color(rgb(current_theme().white))
                         .text_size(px(34.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(duty_txt),
@@ -1415,7 +2130,11 @@ impl RootView {
                             v.fan_manual = true;
                             let d = v.manual_duty;
                             let m = v.mode.clone();
-                            v.spawn_fan_write(cx, FanWrite::Manual(d), format!("{m} statis → {d}%"));
+                            v.spawn_fan_write(
+                                cx,
+                                FanWrite::Manual(d),
+                                format!("{m} statis → {d}%"),
+                            );
                             cx.notify();
                         }))
                         .child(btn("md+", "+ 5%", false, cx, |v, _, _, cx| {
@@ -1424,26 +2143,38 @@ impl RootView {
                             v.fan_manual = true;
                             let d = v.manual_duty;
                             let m = v.mode.clone();
-                            v.spawn_fan_write(cx, FanWrite::Manual(d), format!("{m} statis → {d}%"));
-                            cx.notify();
-                        }))
-                        .child(btn("md-max", "Max 100%", false, cx, |v, _, _, cx| {
-                            v.mode_auto = false;
-                            v.fan_manual = true;
-                            v.manual_duty = fan::MAX_FAN_DUTY_PCT;
-                            let m = v.mode.clone();
                             v.spawn_fan_write(
                                 cx,
-                                FanWrite::Manual(fan::MAX_FAN_DUTY_PCT),
-                                format!("{m} statis → 100%"),
+                                FanWrite::Manual(d),
+                                format!("{m} statis → {d}%"),
                             );
                             cx.notify();
-                        })),
+                        }))
+                        .child(btn_icon(
+                            "md-max",
+                            "zap",
+                            "+",
+                            "Max 100%",
+                            false,
+                            cx,
+                            |v, _, _, cx| {
+                                v.mode_auto = false;
+                                v.fan_manual = true;
+                                v.manual_duty = fan::MAX_FAN_DUTY_PCT;
+                                let m = v.mode.clone();
+                                v.spawn_fan_write(
+                                    cx,
+                                    FanWrite::Manual(fan::MAX_FAN_DUTY_PCT),
+                                    format!("{m} statis → 100%"),
+                                );
+                                cx.notify();
+                            },
+                        )),
                 )
                 .child(
                     div()
                         .flex_shrink_0()
-                        .text_color(rgb(WHITE))
+                        .text_color(rgb(current_theme().white))
                         .text_size(px(34.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(duty_txt),
@@ -1459,10 +2190,10 @@ impl RootView {
                     .w_full()
                     .p_1()
                     .rounded_md()
-                    .bg(rgb(BG))
+                    .bg(rgb(current_theme().bg))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(seg_opt("md-auto", "❄ Auto Kurva", kurva_sel, cx, |v, _, _, cx| {
+                    .border_color(rgb(current_theme().border))
+                    .child(seg_icon("md-auto", "fan", "❄", "Auto Kurva", kurva_sel, cx, |v, _, _, cx| {
                         let snap = v
                             .data
                             .max_temp_c
@@ -1483,7 +2214,7 @@ impl RootView {
                         );
                         cx.notify();
                     }))
-                    .child(seg_opt("md-man", "⚙ Statis", !kurva_sel && !ec_sel, cx, |v, _, _, cx| {
+                    .child(seg_icon("md-man", "settings-2", "⚙", "Statis", !kurva_sel && !ec_sel && !quiet_sel, cx, |v, _, _, cx| {
                         let m = v.mode.clone();
                         let d = v.manual_duty;
                         v.mode_auto = false;
@@ -1491,17 +2222,29 @@ impl RootView {
                         v.spawn_fan_write(cx, FanWrite::Manual(d), format!("{m} statis → {d}%"));
                         cx.notify();
                     }))
-                    .child(seg_opt("md-ec", "◉ Auto EC", ec_sel, cx, |v, _, _, cx| {
+                    .child(seg_icon("md-ec", "cpu", "◉", "Auto EC", ec_sel, cx, |v, _, _, cx| {
                         let m = v.mode.clone();
                         v.fan_manual = false;
                         v.spawn_fan_write(cx, FanWrite::Auto, format!("{m} → AUTO (EC)"));
                         cx.notify();
+                    }))
+                    .child(seg_icon("md-quiet", "volume-x", "○", "Quiet 40%", quiet_sel, cx, |v, _, _, cx| {
+                        let m = v.mode.clone();
+                        v.mode_auto = false;
+                        v.fan_manual = true;
+                        v.manual_duty = fan::MIN_FAN_DUTY_PCT;
+                        v.spawn_fan_write(
+                            cx,
+                            FanWrite::Manual(fan::MIN_FAN_DUTY_PCT),
+                            format!("{m} quiet → 40% (kunci maks)"),
+                        );
+                        cx.notify();
                     })),
                 duty_row,
                 div()
-                    .text_color(rgb(FAINT))
+                    .text_color(rgb(current_theme().faint))
                     .text_xs()
-                    .child("Auto Kurva = snapshot kurva · Auto EC = firmware penuh · Statis = duty tetap. Tracking kontinu butuh axiood.".to_string()),
+                    .child("Auto Kurva = snapshot kurva · Auto EC = firmware penuh · Statis = duty tetap · Quiet = kunci 40%. Tracking kontinu butuh axiood.".to_string()),
             ],
         )
     }
@@ -1510,8 +2253,16 @@ impl RootView {
         card(
             "SISTEM",
             [
-                div().text_color(rgb(TEXT)).text_sm().truncate().child(self.cpu_model.clone()),
-                div().text_color(rgb(DIM)).text_xs().truncate().child(self.product.clone()),
+                div()
+                    .text_color(rgb(current_theme().text))
+                    .text_sm()
+                    .truncate()
+                    .child(self.cpu_model.clone()),
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_xs()
+                    .truncate()
+                    .child(self.product.clone()),
                 kv("GOV", self.data.governor.clone()),
                 kv("EPP", self.data.epp.clone()),
                 kv("FREQ", self.data.cpu_freq_line.clone()),
@@ -1524,11 +2275,16 @@ impl RootView {
             "SUHU",
             [
                 hero_number(
-                    self.data.max_temp_c.map_or("-".to_string(), |t| format!("{t}°C")),
+                    self.data
+                        .max_temp_c
+                        .map_or("-".to_string(), |t| format!("{t}°C")),
                     self.data.cpu_temp_line.clone(),
                 ),
                 kv("FREQ", self.data.cpu_freq_line.clone()),
-                div().text_color(rgb(DIM)).text_xs().child("CPU usage".to_string()),
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_xs()
+                    .child("CPU usage".to_string()),
                 segbar(self.data.cpu_usage_pct),
             ],
         )
@@ -1537,15 +2293,32 @@ impl RootView {
     fn gpu_card(&self) -> Div {
         let mut items: Vec<Div> = Vec::new();
         if self.data.gpus.is_empty() {
-            items.push(div().text_color(rgb(DIM)).text_sm().child("GPU tidur / tak terdeteksi (Optimus?)".to_string()));
+            items.push(
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_sm()
+                    .child("GPU tidur / tak terdeteksi (Optimus?)".to_string()),
+            );
         }
         for g in &self.data.gpus {
-            items.push(div().text_color(rgb(TEXT)).text_sm().truncate().child(g.name.clone()));
+            items.push(
+                div()
+                    .text_color(rgb(current_theme().text))
+                    .text_sm()
+                    .truncate()
+                    .child(g.name.clone()),
+            );
             items.push(hero_number(
                 g.temp_c.map_or("-".to_string(), |t| format!("{t:.0}°C")),
-                g.power_w.map_or("power —".to_string(), |p| format!("{p:.0} W")),
+                g.power_w
+                    .map_or("power —".to_string(), |p| format!("{p:.0} W")),
             ));
-            items.push(div().text_color(rgb(DIM)).text_xs().child("Util".to_string()));
+            items.push(
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_xs()
+                    .child("Util".to_string()),
+            );
             items.push(segbar(g.usage_pct));
             items.push(kv(
                 "CLOCK",
@@ -1558,7 +2331,9 @@ impl RootView {
     /// Kartu kipas ringkas (Dashboard): duty + RPM + pratinjau kurva.
     fn fan_mini_card(&self) -> Div {
         let (rpm1, rpm2) = self.fan_rpms();
-        let duty = self.shown_duty().map_or("-".to_string(), |d| format!("{d}%"));
+        let duty = self
+            .shown_duty()
+            .map_or("-".to_string(), |d| format!("{d}%"));
         let state = if self.fan_manual {
             format!("● MANUAL {}%", self.manual_duty)
         } else {
@@ -1577,16 +2352,46 @@ impl RootView {
                 hero_number(duty, state),
                 kv("FAN 1", format!("{rpm1} RPM")),
                 kv("FAN 2", format!("{rpm2} RPM")),
-                div().text_color(rgb(DIM)).text_xs().truncate().child(preview),
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_xs()
+                    .truncate()
+                    .child(preview),
             ],
         )
     }
 
     fn fan_control_card(&mut self, cx: &mut Context<Self>) -> Div {
+        if self.daemon_on {
+            let qtag = if self.quiet_fan { " + quiet" } else { "" };
+            let (rpm1, rpm2) = self.fan_rpms();
+            return card(
+                "KONTROL",
+                [
+                    div()
+                        .text_color(rgb(current_theme().white))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(format!("● KONTROL: axiood ({}{})", self.mode, qtag)),
+                    kv("DUTY DAEMON", format!("{}%", self.daemon_duty)),
+                    kv("FAN 1", format!("{rpm1} RPM")),
+                    kv("FAN 2", format!("{rpm2} RPM")),
+                    div()
+                        .text_color(rgb(current_theme().faint))
+                        .text_xs()
+                        .child("Loop kontinu milik axiood — kontrol manual nonaktif.".to_string()),
+                ],
+            );
+        }
         let manual = self.fan_manual;
-        let duty_txt = self.shown_duty().map_or("-".to_string(), |d| format!("{d}%"));
+        let duty_txt = self
+            .shown_duty()
+            .map_or("-".to_string(), |d| format!("{d}%"));
         let state = if manual {
-            format!("● KONTROL: MANUAL {}% — langsung tulis EC", self.manual_duty)
+            format!(
+                "● KONTROL: MANUAL {}% — langsung tulis EC",
+                self.manual_duty
+            )
         } else {
             "● KONTROL: AUTO (EC) — langsung tulis EC".to_string()
         };
@@ -1609,45 +2414,76 @@ impl RootView {
                     .w_full()
                     .p_1()
                     .rounded_md()
-                    .bg(rgb(BG))
+                    .bg(rgb(current_theme().bg))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(seg_opt("fan-auto", "❄ Auto (EC)", !manual, cx, |v, _, _, cx| {
-                        v.fan_manual = false;
-                        v.spawn_fan_write(cx, FanWrite::Auto, "kontrol → AUTO (EC)".to_string());
-                        cx.notify();
-                    }))
-                    .child(seg_opt("fan-man", "⚙ Manual", manual, cx, |v, _, _, cx| {
-                        v.fan_manual = true;
-                        v.mode_auto = false;
-                        let d = v.manual_duty;
-                        v.spawn_fan_write(cx, FanWrite::Manual(d), format!("kontrol → MANUAL {d}%"));
-                        cx.notify();
-                    })),
+                    .border_color(rgb(current_theme().border))
+                    .child(seg_icon(
+                        "fan-auto",
+                        "cpu",
+                        "◉",
+                        "Auto (EC)",
+                        !manual,
+                        cx,
+                        |v, _, _, cx| {
+                            v.fan_manual = false;
+                            v.spawn_fan_write(
+                                cx,
+                                FanWrite::Auto,
+                                "kontrol → AUTO (EC)".to_string(),
+                            );
+                            cx.notify();
+                        },
+                    ))
+                    .child(seg_icon(
+                        "fan-man",
+                        "hand",
+                        "⚙",
+                        "Manual",
+                        manual,
+                        cx,
+                        |v, _, _, cx| {
+                            v.fan_manual = true;
+                            v.mode_auto = false;
+                            let d = v.manual_duty;
+                            v.spawn_fan_write(
+                                cx,
+                                FanWrite::Manual(d),
+                                format!("kontrol → MANUAL {d}%"),
+                            );
+                            cx.notify();
+                        },
+                    )),
                 div()
-                    .text_color(rgb(WHITE))
+                    .text_color(rgb(current_theme().white))
                     .text_sm()
                     .font_weight(gpui::FontWeight::BOLD)
                     .child(state),
-                // stepper
+                // stepper — wrap agar tak kepotong di kolom 360px
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
                     .justify_between()
+                    .gap_2()
+                    .flex_wrap()
                     .w_full()
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .gap_2()
+                            .flex_wrap()
                             .child(btn("fd-", "− 5%", false, cx, |v, _, _, cx| {
                                 v.manual_duty =
                                     v.manual_duty.saturating_sub(5).max(fan::MIN_FAN_DUTY_PCT);
                                 v.fan_manual = true;
                                 v.mode_auto = false;
                                 let d = v.manual_duty;
-                                v.spawn_fan_write(cx, FanWrite::Manual(d), format!("manual → {d}%"));
+                                v.spawn_fan_write(
+                                    cx,
+                                    FanWrite::Manual(d),
+                                    format!("manual → {d}%"),
+                                );
                                 cx.notify();
                             }))
                             .child(btn("fd+", "+ 5%", false, cx, |v, _, _, cx| {
@@ -1655,24 +2491,55 @@ impl RootView {
                                 v.fan_manual = true;
                                 v.mode_auto = false;
                                 let d = v.manual_duty;
-                                v.spawn_fan_write(cx, FanWrite::Manual(d), format!("manual → {d}%"));
-                                cx.notify();
-                            }))
-                            .child(btn("fan-max", "Max 100%", false, cx, |v, _, _, cx| {
-                                v.fan_manual = true;
-                                v.mode_auto = false;
-                                v.manual_duty = fan::MAX_FAN_DUTY_PCT;
                                 v.spawn_fan_write(
                                     cx,
-                                    FanWrite::Manual(fan::MAX_FAN_DUTY_PCT),
-                                    "manual → 100%".to_string(),
+                                    FanWrite::Manual(d),
+                                    format!("manual → {d}%"),
                                 );
                                 cx.notify();
-                            })),
+                            }))
+                            .child(btn_icon(
+                                "fan-max",
+                                "zap",
+                                "+",
+                                "Max 100%",
+                                false,
+                                cx,
+                                |v, _, _, cx| {
+                                    v.fan_manual = true;
+                                    v.mode_auto = false;
+                                    v.manual_duty = fan::MAX_FAN_DUTY_PCT;
+                                    v.spawn_fan_write(
+                                        cx,
+                                        FanWrite::Manual(fan::MAX_FAN_DUTY_PCT),
+                                        "manual → 100%".to_string(),
+                                    );
+                                    cx.notify();
+                                },
+                            ))
+                            .child(btn_icon(
+                                "fan-quiet",
+                                "volume-x",
+                                "○",
+                                "Quiet 40%",
+                                false,
+                                cx,
+                                |v, _, _, cx| {
+                                    v.fan_manual = true;
+                                    v.mode_auto = false;
+                                    v.manual_duty = fan::MIN_FAN_DUTY_PCT;
+                                    v.spawn_fan_write(
+                                        cx,
+                                        FanWrite::Manual(fan::MIN_FAN_DUTY_PCT),
+                                        "manual quiet → 40% (kunci maks)".to_string(),
+                                    );
+                                    cx.notify();
+                                },
+                            )),
                     )
                     .child(
                         div()
-                            .text_color(rgb(WHITE))
+                            .text_color(rgb(current_theme().white))
                             .text_size(px(30.))
                             .font_weight(gpui::FontWeight::BOLD)
                             .flex_shrink_0()
@@ -1680,15 +2547,59 @@ impl RootView {
                     ),
                 kv("FAN 1", format!("{rpm1} RPM")),
                 kv("FAN 2", format!("{rpm2} RPM")),
-                div().text_color(rgb(DIM)).text_xs().truncate().child(preview),
-                div().text_color(rgb(FAINT)).text_xs().truncate().child(
-                    self.data.ec_err.clone().unwrap_or_else(|| "EC: live".to_string()),
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_xs()
+                    .truncate()
+                    .child(preview),
+                div().text_color(rgb(current_theme().faint)).text_xs().truncate().child(
+                    self.data
+                        .ec_err
+                        .clone()
+                        .unwrap_or_else(|| "EC: live".to_string()),
                 ),
             ],
         )
     }
 
     fn curve_card(&mut self, cx: &mut Context<Self>) -> Div {
+        let bounds_cell = std::rc::Rc::<std::cell::Cell<Option<Bounds<gpui::Pixels>>>>::new(
+            std::cell::Cell::new(None),
+        );
+        if self.daemon_on {
+            // Read-only: kurva efektif milik axiood (di-cerminkan via poll).
+            return card(
+                "KURVA",
+                [
+                    div().w_full().child(curve_chart(
+                        self.curve.clone(),
+                        self.data.max_temp_c,
+                        None,
+                        bounds_cell,
+                        cx,
+                    )),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .w_full()
+                        .px(px(10.))
+                        .text_color(rgb(current_theme().faint))
+                        .text_xs()
+                        .child(div().child("20°".to_string()))
+                        .child(div().child("40°".to_string()))
+                        .child(div().child("60°".to_string()))
+                        .child(div().child("80°".to_string()))
+                        .child(div().child("100°".to_string())),
+                    div()
+                        .text_color(rgb(current_theme().faint))
+                        .text_xs()
+                        .child("Kurva efektif axiood — ubah via mode + quiet-fan.".to_string()),
+                ],
+            );
+        }
+        // Legacy (daemon mati): editor kurva + tulis snapshot satu-kali.
         let mut rows: Vec<Div> = Vec::new();
         for (i, (t, d)) in self.curve.clone().iter().enumerate() {
             rows.push(
@@ -1700,7 +2611,7 @@ impl RootView {
                     .w_full()
                     .child(
                         div()
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(current_theme().text))
                             .text_sm()
                             .child(format!("≥ {t:>3}°C → {d:>3}%")),
                     )
@@ -1709,41 +2620,52 @@ impl RootView {
                             .flex()
                             .flex_row()
                             .gap_1()
-                            .child(btn_sm(&format!("ct-{i}-"), "−T", cx, move |v, _, _, cx| {
-                                edit_temp(v, i, -5);
-                                v.curve_live(cx, "edit");
-                                cx.notify();
-                            }))
+                            .child(btn_sm(
+                                &format!("ct-{i}-"),
+                                "−T",
+                                cx,
+                                move |v, _, _, cx| {
+                                    edit_temp(v, i, -5);
+                                    v.curve_live(cx, "edit");
+                                    cx.notify();
+                                },
+                            ))
                             .child(btn_sm(&format!("ct-{i}+"), "+T", cx, move |v, _, _, cx| {
                                 edit_temp(v, i, 5);
                                 v.curve_live(cx, "edit");
                                 cx.notify();
                             }))
-                            .child(btn_sm(&format!("cd-{i}-"), "−D", cx, move |v, _, _, cx| {
-                                edit_duty(v, i, -5);
-                                v.curve_live(cx, "edit");
-                                cx.notify();
-                            }))
+                            .child(btn_sm(
+                                &format!("cd-{i}-"),
+                                "−D",
+                                cx,
+                                move |v, _, _, cx| {
+                                    edit_duty(v, i, -5);
+                                    v.curve_live(cx, "edit");
+                                    cx.notify();
+                                },
+                            ))
                             .child(btn_sm(&format!("cd-{i}+"), "+D", cx, move |v, _, _, cx| {
                                 edit_duty(v, i, 5);
                                 v.curve_live(cx, "edit");
                                 cx.notify();
                             }))
-                            .child(btn_sm(&format!("cdel-{i}"), "×", cx, move |v, _, _, cx| {
-                                if v.curve.len() > 1 {
-                                    v.curve.remove(i);
-                                    v.mark_custom();
-                                    v.curve_live(cx, "edit");
-                                }
-                                cx.notify();
-                            })),
+                            .child(btn_sm(
+                                &format!("cdel-{i}"),
+                                "×",
+                                cx,
+                                move |v, _, _, cx| {
+                                    if v.curve.len() > 1 {
+                                        v.curve.remove(i);
+                                        v.mark_custom();
+                                        v.curve_live(cx, "edit");
+                                    }
+                                    cx.notify();
+                                },
+                            )),
                     ),
             );
         }
-        let bounds_cell =
-            std::rc::Rc::<std::cell::Cell<Option<Bounds<gpui::Pixels>>>>::new(
-                std::cell::Cell::new(None),
-            );
         let mut items: Vec<Div> = vec![
             div().w_full().child(curve_chart(
                 self.curve.clone(),
@@ -1759,7 +2681,7 @@ impl RootView {
                 .justify_between()
                 .w_full()
                 .px(px(10.))
-                .text_color(rgb(FAINT))
+                .text_color(rgb(current_theme().faint))
                 .text_xs()
                 .child(div().child("20°".to_string()))
                 .child(div().child("40°".to_string()))
@@ -1779,26 +2701,26 @@ impl RootView {
                         .gap_2()
                         .flex_shrink_0()
                         .child(btn("c-add", "+ titik", false, cx, |v, _, _, cx| {
-                    let (lt, _) = v.curve.last().copied().unwrap_or((20, 40));
-                    v.curve.push(((lt + 10).min(100), fan::MAX_FAN_DUTY_PCT));
-                    v.sort_curve();
-                    v.mark_custom();
-                    v.curve_live(cx, "titik+");
-                    cx.notify();
-                }))
-                .child(btn("c-reset", "reset", false, cx, |v, _, _, cx| {
-                    let m = v.mode.clone();
-                    v.curve = mode_curve(&m);
-                    v.notice = None;
-                    v.curve_live(cx, "reset");
-                    cx.notify();
-                })),
+                            let (lt, _) = v.curve.last().copied().unwrap_or((20, 40));
+                            v.curve.push(((lt + 10).min(100), fan::MAX_FAN_DUTY_PCT));
+                            v.sort_curve();
+                            v.mark_custom();
+                            v.curve_live(cx, "titik+");
+                            cx.notify();
+                        }))
+                        .child(btn("c-reset", "reset", false, cx, |v, _, _, cx| {
+                            let m = v.mode.clone();
+                            v.curve = mode_curve(&m);
+                            v.notice = None;
+                            v.curve_live(cx, "reset");
+                            cx.notify();
+                        })),
                 )
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.))
-                        .text_color(rgb(FAINT))
+                        .text_color(rgb(current_theme().faint))
                         .text_xs()
                         .text_right()
                         .truncate()
@@ -1814,7 +2736,10 @@ impl RootView {
             "MEMORI",
             [
                 segbar(self.data.mem_pct),
-                div().text_color(rgb(TEXT)).text_sm().child(self.data.mem_line.clone()),
+                div()
+                    .text_color(rgb(current_theme().text))
+                    .text_sm()
+                    .child(self.data.mem_line.clone()),
             ],
         )
     }
@@ -1826,27 +2751,39 @@ impl RootView {
             items.push(segbar(Some(p)));
         }
         if self.data.bat_rows.is_empty() {
-            items.push(div().text_color(rgb(DIM)).text_sm().child("(baterai —)".to_string()));
+            items.push(
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_sm()
+                    .child("(baterai —)".to_string()),
+            );
         }
         for b in &self.data.bat_rows {
-            items.push(div().text_color(rgb(TEXT)).text_sm().child(b.clone()));
+            items.push(div().text_color(rgb(current_theme().text)).text_sm().child(b.clone()));
         }
         card("BATERAI", items)
     }
 
     fn power_card(&self) -> Div {
-        let watts = self.data.pkg_watts.map_or("-".to_string(), |p| format!("{p:.1} W"));
+        let watts = self
+            .data
+            .pkg_watts
+            .map_or("-".to_string(), |p| format!("{p:.1} W"));
         card(
             "DAYA CPU",
             [
                 hero_number(watts, "paket (RAPL)".to_string()),
-                div().text_color(rgb(FAINT)).text_xs().child("read-only · counter butuh root".to_string()),
+                div()
+                    .text_color(rgb(current_theme().faint))
+                    .text_xs()
+                    .child("read-only · counter butuh root".to_string()),
             ],
         )
     }
 
     /// Tulis backlight langsung (sysfs LED, aman; root) ke zona target
     /// (`None` = semua zona). Sinkron (±ms) + hasil ke toast.
+    /// Otomatis stop efek animasi (kembali ke Static) agar tak rebutan tulis.
     fn kbd_apply(
         &mut self,
         cx: &mut Context<Self>,
@@ -1855,6 +2792,11 @@ impl RootView {
         target: Option<usize>,
         label: String,
     ) {
+        if self.kbd_effect != "static" {
+            self.stop_kbd_effect();
+            self.kbd_effect = "static".to_string();
+            self.persist();
+        }
         let devs = kbd::discover();
         let targets: Vec<&kbd::KbdBacklight> = match target {
             None => devs.iter().collect(),
@@ -1887,10 +2829,10 @@ impl RootView {
         cx.notify();
     }
 
-    /// Teks target zona: "semua" / Z1..Z3 / Numpad (urutan discover).
+    /// Zone label: "All" / Z1..Z3 / Numpad
     fn kbd_target_txt(sel: Option<usize>) -> String {
         match sel {
-            None => "semua".to_string(),
+            None => "All".to_string(),
             Some(3) => "Numpad".to_string(),
             Some(i) => format!("Z{}", i + 1),
         }
@@ -1898,10 +2840,11 @@ impl RootView {
 
     /// State acuan zona target: (brightness, rgb); default zona 0.
     fn kbd_zone_state(&self, tgt: Option<usize>) -> (u32, (u8, u8, u8)) {
-        tgt.and_then(|i| self.data.kbd_zones.get(i).copied()).unwrap_or((
-            self.data.kbd_brightness.unwrap_or(0),
-            self.data.kbd_rgb.unwrap_or((255, 255, 255)),
-        ))
+        tgt.and_then(|i| self.data.kbd_zones.get(i).copied())
+            .unwrap_or((
+                self.data.kbd_brightness.unwrap_or(0),
+                self.data.kbd_rgb.unwrap_or((255, 255, 255)),
+            ))
     }
 
     fn kbd_max(&self) -> u32 {
@@ -1922,16 +2865,21 @@ impl RootView {
             let mut groups: Vec<Vec<Div>> = (0..nz).map(|_| Vec::new()).collect();
             for c in 0..15 {
                 let z = (c * nz / 15).min(nz - 1);
-                let (b, col) = self.data.kbd_zones.get(z).copied().unwrap_or((0, (0, 0, 0)));
+                let (b, col) = self
+                    .data
+                    .kbd_zones
+                    .get(z)
+                    .copied()
+                    .unwrap_or((0, (0, 0, 0)));
                 let g = glow(col, b as f32 / max);
-                let bc = if g == 0 { BORDER } else { g };
+                let bc = if g == 0 { current_theme().border } else { g };
                 groups[z].push(
                     div()
                         .flex_1()
                         .min_w(px(0.))
                         .h(px(24.))
                         .rounded_sm()
-                        .bg(rgb(PANEL2))
+                        .bg(rgb(current_theme().panel2))
                         .border_1()
                         .border_color(rgb(bc)),
                 );
@@ -1968,26 +2916,34 @@ impl RootView {
             "VISUAL",
             [
                 div().flex().flex_col().gap_1().w_full().children(rows),
-                div().text_color(rgb(DIM)).text_xs().truncate().child(zone_txt),
+                div()
+                    .text_color(rgb(current_theme().dim))
+                    .text_xs()
+                    .truncate()
+                    .child(zone_txt),
             ],
         )
     }
 
-    fn kbd_status_card(&self) -> Div {        if self.data.kbd_nodes == 0 {
+    fn kbd_status_card(&self) -> Div {
+        if self.data.kbd_nodes == 0 {
             return card(
                 "KEYBOARD",
                 [
-                    div().text_color(rgb(TEXT)).text_sm().child("LED tak ada".to_string()),
-                    div().text_color(rgb(DIM)).text_xs().child(
-                        "butuh quirk DKMS 0x17 (packaging/clevo-drivers-axioo)".to_string(),
-                    ),
+                    div()
+                        .text_color(rgb(current_theme().text))
+                        .text_sm()
+                        .child("LED tak ada".to_string()),
+                    div()
+                        .text_color(rgb(current_theme().dim))
+                        .text_xs()
+                        .child("butuh quirk DKMS 0x17 (packaging/clevo-drivers-axioo)".to_string()),
                 ],
             );
         }
-        let rgb_txt = self
-            .data
-            .kbd_rgb
-            .map_or("-".to_string(), |(r, g, b)| format!("#{r:02X}{g:02X}{b:02X}"));
+        let rgb_txt = self.data.kbd_rgb.map_or("-".to_string(), |(r, g, b)| {
+            format!("#{r:02X}{g:02X}{b:02X}")
+        });
         card(
             "KEYBOARD",
             [
@@ -2085,13 +3041,12 @@ impl RootView {
                         let oy: f32 = bounds.origin.y.into();
                         let vals = [col.0, col.1, col.2];
                         let row_h = (h - 2.0 * RGB_PAD) / RGB_ROWS as f32;
-                        for c in 0..3 {
+                        for (c, _) in vals.iter().enumerate() {
                             let y0 = oy + RGB_PAD + c as f32 * row_h + 5.0;
                             let y1 = oy + RGB_PAD + (c + 1) as f32 * row_h - 5.0;
                             for s in 0..32 {
                                 let x0 = ox + RGB_PAD + s as f32 / 32.0 * (w - 2.0 * RGB_PAD);
-                                let x1 =
-                                    ox + RGB_PAD + (s + 1) as f32 / 32.0 * (w - 2.0 * RGB_PAD);
+                                let x1 = ox + RGB_PAD + (s + 1) as f32 / 32.0 * (w - 2.0 * RGB_PAD);
                                 let mut seg = PathBuilder::fill();
                                 seg.add_polygon(
                                     &[
@@ -2111,7 +3066,7 @@ impl RootView {
                             knob.move_to(point(px(kx), px(y0 - 2.0)));
                             knob.line_to(point(px(kx), px(y1 + 2.0)));
                             if let Ok(p) = knob.build() {
-                                window.paint_path(p, rgb(WHITE));
+                                window.paint_path(p, rgb(current_theme().white));
                             }
                         }
                     },
@@ -2193,11 +3148,14 @@ impl RootView {
                 .rounded_md()
                 .bg(rgb(hex))
                 .border_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(current_theme().border))
                 .into_any_element(),
-            div().w_full().child(self.rgb_sliders(cx)).into_any_element(),
             div()
-                .text_color(rgb(DIM))
+                .w_full()
+                .child(self.rgb_sliders(cx))
+                .into_any_element(),
+            div()
+                .text_color(rgb(current_theme().dim))
                 .text_sm()
                 .truncate()
                 .child(format!("R {r} · G {g} · B {b} · #{hex:06X}"))
@@ -2247,7 +3205,7 @@ impl RootView {
                     .rounded_sm()
                     .bg(rgb(0x000000))
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(current_theme().border))
             } else {
                 div().w(px(16.)).h(px(16.)).rounded_sm().bg(rgb(hex))
             };
@@ -2259,11 +3217,11 @@ impl RootView {
                     .px_3()
                     .py_2()
                     .rounded_md()
-                    .bg(rgb(PANEL2))
+                    .bg(rgb(current_theme().panel2))
                     .border_1()
-                    .border_color(rgb(if sel { WHITE } else { BORDER }))
+                    .border_color(rgb(if sel { current_theme().white } else { current_theme().border }))
                     .cursor_pointer()
-                    .hover(move |s| s.bg(rgb(lighten(PANEL2, 0.2))))
+                    .hover(move |s| s.bg(rgb(lighten(current_theme().panel2, 0.2))))
                     .child(
                         div()
                             .flex()
@@ -2273,7 +3231,7 @@ impl RootView {
                             .child(dot)
                             .child(
                                 div()
-                                    .text_color(rgb(if sel { WHITE } else { TEXT }))
+                                    .text_color(rgb(if sel { current_theme().white } else { current_theme().text }))
                                     .text_sm()
                                     .whitespace_nowrap()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -2298,8 +3256,9 @@ impl RootView {
             );
         }
         // Tile Custom: buka/tutup popup color picker.
-        let custom_hex =
-            (self.custom_rgb.0 as u32) << 16 | (self.custom_rgb.1 as u32) << 8 | self.custom_rgb.2 as u32;
+        let custom_hex = (self.custom_rgb.0 as u32) << 16
+            | (self.custom_rgb.1 as u32) << 8
+            | self.custom_rgb.2 as u32;
         let custom_open = self.show_rgb_popup;
         tiles.push(
             div()
@@ -2309,11 +3268,11 @@ impl RootView {
                 .px_3()
                 .py_2()
                 .rounded_md()
-                .bg(rgb(PANEL2))
+                .bg(rgb(current_theme().panel2))
                 .border_1()
-                .border_color(rgb(if custom_open { WHITE } else { BORDER }))
+                .border_color(rgb(if custom_open { current_theme().white } else { current_theme().border }))
                 .cursor_pointer()
-                .hover(move |s| s.bg(rgb(lighten(PANEL2, 0.2))))
+                .hover(move |s| s.bg(rgb(lighten(current_theme().panel2, 0.2))))
                 .child(
                     div()
                         .flex()
@@ -2327,11 +3286,11 @@ impl RootView {
                                 .rounded_sm()
                                 .bg(rgb(custom_hex))
                                 .border_1()
-                                .border_color(rgb(BORDER)),
+                                .border_color(rgb(current_theme().border)),
                         )
                         .child(
                             div()
-                                .text_color(rgb(if custom_open { WHITE } else { TEXT }))
+                                .text_color(rgb(if custom_open { current_theme().white } else { current_theme().text }))
                                 .text_sm()
                                 .whitespace_nowrap()
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -2351,7 +3310,7 @@ impl RootView {
                 })),
         );
         card(
-            "WARNA",
+            "COLOR",
             [
                 div()
                     .flex()
@@ -2359,33 +3318,302 @@ impl RootView {
                     .gap_1()
                     .w_full()
                     .p_1()
-                    .rounded_md()
-                    .bg(rgb(BG))
+                    .rounded_lg()
+                    .bg(rgb(self.theme.panel2))
                     .border_1()
-                    .border_color(rgb(BORDER))
-                    .child(seg_opt("kbz-all", "Semua", self.kbd_zone_sel.is_none(), cx, |v, _, _, cx| {
-                        v.kbd_zone_sel = None;
-                        cx.notify();
-                    }))
-                    .child(seg_opt("kbz-0", "Kiri", self.kbd_zone_sel == Some(0), cx, |v, _, _, cx| {
-                        v.kbd_zone_sel = Some(0);
-                        cx.notify();
-                    }))
-                    .child(seg_opt("kbz-1", "Tengah", self.kbd_zone_sel == Some(1), cx, |v, _, _, cx| {
-                        v.kbd_zone_sel = Some(1);
-                        cx.notify();
-                    }))
-                    .child(seg_opt("kbz-2", "Kanan", self.kbd_zone_sel == Some(2), cx, |v, _, _, cx| {
-                        v.kbd_zone_sel = Some(2);
-                        cx.notify();
-                    }))
-                    .child(seg_opt("kbz-3", "Numpad", self.kbd_zone_sel == Some(3), cx, |v, _, _, cx| {
-                        v.kbd_zone_sel = Some(3);
-                        cx.notify();
+                    .border_color(rgb(self.theme.border))
+                    .child(seg_opt(
+                        "kbz-all",
+                        "All",
+                        self.kbd_zone_sel.is_none(),
+                        cx,
+                        |v, _, _, cx| {
+                            v.kbd_zone_sel = None;
+                            cx.notify();
+                        },
+                    ))
+                    .child(seg_opt(
+                        "kbz-0",
+                        "Left",
+                        self.kbd_zone_sel == Some(0),
+                        cx,
+                        |v, _, _, cx| {
+                            v.kbd_zone_sel = Some(0);
+                            cx.notify();
+                        },
+                    ))
+                    .child(seg_opt(
+                        "kbz-1",
+                        "Center",
+                        self.kbd_zone_sel == Some(1),
+                        cx,
+                        |v, _, _, cx| {
+                            v.kbd_zone_sel = Some(1);
+                            cx.notify();
+                        },
+                    ))
+                    .child(seg_opt(
+                        "kbz-2",
+                        "Right",
+                        self.kbd_zone_sel == Some(2),
+                        cx,
+                        |v, _, _, cx| {
+                            v.kbd_zone_sel = Some(2);
+                            cx.notify();
+                        },
+                    ))
+                    .child(seg_opt(
+                        "kbz-3",
+                        "Numpad",
+                        self.kbd_zone_sel == Some(3),
+                        cx,
+                        |v, _, _, cx| {
+                            v.kbd_zone_sel = Some(3);
+                            cx.notify();
+                        },
+                    )),
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .w_full()
+                    .children(tiles),
+                div()
+                    .text_color(rgb(current_theme().faint))
+                    .text_xs()
+                    .child("Zone selector above — applies to color and brightness".to_string()),
+            ],
+        )
+    }
+
+    /// Card efek RGB: Static (diam) + 4 animasi userspace. Static = warna preset/custom biasa;
+    /// efek lain spawn thread `kbd_effect::run_blocking` (~16fps, tulis ke `/sys/class/leds`).
+    fn kbd_effect_card(&mut self, cx: &mut Context<Self>) -> Div {
+        let cur = self.kbd_effect.clone();
+        let mut btns: Vec<Stateful<Div>> = Vec::new();
+        for eff in kbd_effect::KbdEffect::all() {
+            let sel = cur == eff.as_str();
+            let name = eff.as_str().to_string();
+            let label = eff.label().to_string();
+            let desc = eff.desc().to_string();
+            btns.push(
+                div()
+                    .id(SharedString::from(format!("kbe-{name}")))
+                    .w(px(148.))
+                    .min_w(px(140.))
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(rgb(if sel { current_theme().white } else { current_theme().panel2 }))
+                    .border_1()
+                    .border_color(rgb(if sel { current_theme().white } else { current_theme().border }))
+                    .cursor_pointer()
+                    .hover(move |s| {
+                        s.bg(rgb(if sel {
+                            darken(current_theme().white, 0.1)
+                        } else {
+                            lighten(current_theme().panel2, 0.2)
+                        }))
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .min_h(px(52.))
+                            .child(
+                                div()
+                                    .text_color(rgb(if sel { current_theme().ink } else { current_theme().text }))
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(format!("{}{}", if sel { "● " } else { "" }, label)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(if sel { current_theme().ink } else { current_theme().dim }))
+                                    .text_xs()
+                                    .child(desc),
+                            ),
+                    )
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.set_kbd_effect(name.clone(), cx);
                     })),
+            );
+        }
+        let info = if cur == "static" {
+            "Static = solid color — use presets or custom color below."
+        } else {
+            "Animation running — tap Static to stop."
+        };
+        card_with_theme(
+            &self.theme,
+            "EFFECTS",
+            [
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .w_full()
+                    .children(btns),
+                div()
+                    .text_color(rgb(self.theme.faint))
+                    .text_xs()
+                    .child(info.to_string()),
+            ],
+        )
+    }
+
+    fn stop_kbd_effect(&mut self) {
+        if let Some(flag) = self.kbd_effect_stop.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn set_kbd_effect(&mut self, name: String, cx: &mut Context<Self>) {
+        let eff = match kbd_effect::KbdEffect::parse(&name) {
+            Some(e) => e,
+            None => return,
+        };
+        // stop lama dulu
+        self.stop_kbd_effect();
+        self.kbd_effect = name.clone();
+        self.persist();
+        if eff == kbd_effect::KbdEffect::Static {
+            self.toast = Some(Toast {
+                text: "Effect: Static".to_string(),
+                at: Instant::now(),
+                error: false,
+            });
+            cx.notify();
+            return;
+        }
+        let base = if self.custom_rgb != (255, 255, 255) {
+            self.custom_rgb
+        } else {
+            self.kbd_zone_state(self.kbd_zone_sel).1
+        };
+        let brightness = self.kbd_max();
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = stop.clone();
+        std::thread::spawn(move || {
+            kbd_effect::run_blocking(eff, base, brightness, s);
+        });
+        self.kbd_effect_stop = Some(stop);
+        self.toast = Some(Toast {
+            text: format!("Effect: {}", name),
+            at: Instant::now(),
+            error: false,
+        });
+        cx.notify();
+    }
+
+    fn set_theme(&mut self, name: String, cx: &mut Context<Self>) {
+        let th = Theme::by_name(&name);
+        self.theme = th.clone();
+        self.persist();
+        self.toast = Some(Toast {
+            text: format!("tema → {} ", th.label),
+            at: Instant::now(),
+            error: false,
+        });
+        cx.notify();
+    }
+
+    fn theme_card(&mut self, cx: &mut Context<Self>) -> Div {
+        let cur = self.theme.name.to_string();
+        let mut tiles: Vec<Stateful<Div>> = Vec::new();
+        for th in Theme::all() {
+            let sel = cur == th.name;
+            let name = th.name.to_string();
+            let label = th.label.to_string();
+            // preview strip: bg/panel/accent
+            let preview = div()
+                .flex()
+                .flex_row()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .w(px(10.))
+                        .h(px(10.))
+                        .rounded_sm()
+                        .bg(rgb(th.bg))
+                        .border_1()
+                        .border_color(rgb(th.border)),
+                )
+                .child(div().w(px(10.)).h(px(10.)).rounded_sm().bg(rgb(th.panel)))
+                .child(div().w(px(10.)).h(px(10.)).rounded_sm().bg(rgb(th.accent)));
+            tiles.push(
+                div()
+                    .id(SharedString::from(format!("theme-{name}")))
+                    .w(px(148.))
+                    .px_3()
+                    .py_2()
+                    .rounded_xl()
+                    .bg(rgb(if sel { th.accent } else { th.panel2 }))
+                    .border_1()
+                    .border_color(rgb(if sel { th.accent } else { th.border }))
+                    .shadow_sm()
+                    .cursor_pointer()
+                    .hover(move |s| {
+                        s.bg(rgb(if sel {
+                            lighten(th.accent, 0.15)
+                        } else {
+                            lighten(th.panel2, 0.15)
+                        }))
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_color(rgb(if sel { th.white } else { th.text }))
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(label),
+                            )
+                            .child(preview)
+                            .child(
+                                div()
+                                    .text_color(rgb(if sel { th.white } else { th.dim }))
+                                    .text_xs()
+                                    .child(th.name.to_string()),
+                            ),
+                    )
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        v.set_theme(name.clone(), cx);
+                    })),
+            );
+        }
+        card_with_theme(
+            &self.theme,
+            "THEME",
+            [
                 div().flex().flex_row().flex_wrap().gap_2().w_full().children(tiles),
-                div().text_color(rgb(FAINT)).text_xs().child(
-                    "target zona di atas — berlaku untuk warna + brightness".to_string(),
+                div().text_color(rgb(self.theme.faint)).text_xs().child(
+                    if self.theme.name == "matugen" {
+                        "Matugen follows your wallpaper (~/.cache/ryoku/colors.json, auto-updates)".to_string()
+                    } else {
+                        "Choose a theme — Gruvbox and Ryoku look great on tiling WMs, Matugen follows wallpaper".to_string()
+                    },
+                ),
+            ],
+        )
+    }
+
+    fn settings_info_card(&self) -> Div {
+        card_with_theme(
+            &self.theme,
+            "SETTINGS",
+            [
+                kv("Language", "English".to_string()),
+                kv("Tiling WM", "Optimized for Hyprland & other tiling WMs".to_string()),
+                kv("Window", "Resizable, responsive down to 700px".to_string()),
+                div().text_color(rgb(self.theme.faint)).text_xs().child(
+                    "All pages are scrollable. Theme is applied instantly and saved to ~/.config/axioo-control-center/state.json".to_string(),
                 ),
             ],
         )
@@ -2413,24 +3641,39 @@ impl Render for RootView {
                         .items_center()
                         .gap_2()
                         .w_full()
-                        .child(div().text_color(rgb(FAINT)).text_xs().child(last_section.to_string()))
-                        .child(div().h(px(1.)).flex_1().bg(rgb(BORDER))),
+                        .child(
+                            div()
+                                .text_color(rgb(current_theme().faint))
+                                .text_xs()
+                                .child(last_section.to_string()),
+                        )
+                        .child(div().h(px(1.)).flex_1().bg(rgb(current_theme().border))),
                 );
             }
             let sel = tab == t;
-            nav.push(div().w_full().child(nav_item(t, sel, cx, move |v, _, _, cx| {
-                v.tab = t;
-                v.scroll_px = 0.0;
-                cx.notify();
-            })));
+            nav.push(
+                div()
+                    .w_full()
+                    .child(nav_item(t, sel, cx, move |v, _, _, cx| {
+                        v.tab = t;
+                        v.scroll_px = 0.0;
+                        cx.notify();
+                    })),
+            );
         }
 
-        // ---- cluster status kanan: tiga pill sejajar ----
+        // ---- status pills (right cluster) ----
         let is_root = fan_ctrl::is_root();
         let ec_live = self.data.ec.is_some();
-        let ec_txt = self.data.ec.map_or("○ EC butuh root".to_string(), |s| {
-            format!("● EC {}°C · {} RPM", s.cpu_temp_raw, s.fan1_rpm)
+        let ec_txt = self.data.ec.map_or("○ Hardware".to_string(), |s| {
+            format!("● {}°C · {} RPM", s.cpu_temp_raw, s.fan1_rpm)
         });
+        let (daemon_txt, daemon_ok) = if self.daemon_on {
+            let q = if self.quiet_fan { " +quiet" } else { "" };
+            (format!("● {}{} · {}", self.mode, q, self.daemon_ppd), true)
+        } else {
+            ("○ Service offline".to_string(), false)
+        };
 
         // ---- tab content ----
         let content: Div = match tab {
@@ -2446,9 +3689,30 @@ impl Render for RootView {
                         .when(narrow, |s| s.flex_col())
                         .gap_2()
                         .w_full()
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.temp_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.fan_mini_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.sys_card())),
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.temp_card()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.fan_mini_card()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.sys_card()),
+                        ),
                 )
                 .child(
                     div()
@@ -2457,9 +3721,30 @@ impl Render for RootView {
                         .when(narrow, |s| s.flex_col())
                         .gap_2()
                         .w_full()
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.gpu_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.mem_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.bat_card())),
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.gpu_card()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.mem_card()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.bat_card()),
+                        ),
                 ),
             Tab::Performa => div()
                 .flex()
@@ -2474,45 +3759,13 @@ impl Render for RootView {
                         .flex_row()
                         .gap_2()
                         .w_full()
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.temp_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.gpu_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.power_card())),
-                ),
-            Tab::Kipas => div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .w_full()
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_start()
-                        .gap_2()
-                        .w_full()
-                        .child(div().flex().flex_col().w(px(340.)).flex_shrink_0().child(self.fan_control_card(cx)))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.curve_card(cx))),
-                ),
-            Tab::Keyboard => div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .w_full()
-                .child(div().w_full().child(self.kbd_visual_card()))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_start()
-                        .gap_2()
-                        .w_full()
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .flex_1()
                                 .min_w(px(0.))
-                                .child(self.kbd_status_card()),
+                                .child(self.temp_card()),
                         )
                         .child(
                             div()
@@ -2520,35 +3773,117 @@ impl Render for RootView {
                                 .flex_col()
                                 .flex_1()
                                 .min_w(px(0.))
-                                .child(self.kbd_bright_card(cx)),
+                                .child(self.gpu_card()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.power_card()),
                         ),
-                )
-                .child(
+                ),
+            Tab::Kipas => {
+                // Kipas butuh lebar ekstra (kolom 340px + chart); breakpoint
+                // lebih tinggi dari tab lain agar tak kepotong horizontal.
+                let kipas_narrow = vw < 1280.0;
+                div().flex().flex_col().gap_2().w_full().child(
                     div()
                         .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .child(self.kbd_color_card(cx)),
-                ),
-            Tab::Daya => div()
+                        .flex_row()
+                        .items_start()
+                        .gap_2()
+                        .w_full()
+                        .when(kipas_narrow, |s| s.flex_col())
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .w(px(360.))
+                                .flex_shrink_0()
+                                .when(kipas_narrow, |s| s.w_full())
+                                .child(self.fan_control_card(cx)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .child(self.curve_card(cx)),
+                        ),
+                )
+            }
+            Tab::Keyboard => div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap_3()
                 .w_full()
+                .child(self.kbd_visual_card())
                 .child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
+                        .gap_3()
                         .w_full()
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.bat_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.power_card()))
-                        .child(div().flex().flex_col().flex_1().min_w(px(0.)).child(self.mem_card())),
-                ),
+                        .when(narrow, |s| s.flex_col())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(280.))
+                                .child(self.kbd_bright_card(cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(320.))
+                                .child(self.kbd_color_card(cx)),
+                        ),
+                )
+                .child(self.kbd_effect_card(cx)),
+            Tab::Daya => div().flex().flex_col().gap_3().w_full().child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .w_full()
+                    .when(narrow, |s| s.flex_col())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(self.bat_card()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(self.power_card()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(self.mem_card()),
+                    ),
+            ),
+            Tab::Settings => div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .w_full()
+                .child(self.theme_card(cx))
+                .child(self.settings_info_card()),
         };
 
-        let notice = self.notice.clone().unwrap_or_else(|| "siap.".to_string());
+        let notice = self.notice.clone().unwrap_or_else(|| "Ready.".to_string());
 
         // ---- toast: mengambang kanan-bawah, tak menggeser layout ----
         let toast_el: AnyElement = match &self.toast {
@@ -2560,26 +3895,24 @@ impl Render for RootView {
                 .max_w(px(460.))
                 .p_3()
                 .rounded_md()
-                .bg(rgb(PANEL2))
+                .bg(rgb(current_theme().panel2))
                 .border_1()
-                .border_color(rgb(if t.error { WHITE } else { BORDER }))
+                .border_color(rgb(if t.error { current_theme().white } else { current_theme().border }))
                 .cursor_pointer()
                 .child(
                     div()
-                        .text_color(rgb(if t.error { WHITE } else { DIM }))
+                        .text_color(rgb(if t.error { current_theme().white } else { current_theme().dim }))
                         .text_xs()
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child(
-                            if t.error {
-                                "■ GAGAL — klik untuk tutup".to_string()
-                            } else {
-                                "■ OK — klik untuk tutup".to_string()
-                            },
-                        ),
+                        .child(if t.error {
+                            "■ GAGAL — klik untuk tutup".to_string()
+                        } else {
+                            "■ OK — klik untuk tutup".to_string()
+                        }),
                 )
                 .child(
                     div()
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(current_theme().text))
                         .text_sm()
                         .line_clamp(4)
                         .child(t.text.clone()),
@@ -2591,30 +3924,6 @@ impl Render for RootView {
                 .into_any_element(),
             None => div().into_any_element(),
         };
-
-        // ---- scrollbar ala kit: thumb dari ukur frame lalu ----
-        let meas = self.scroll_meas.get();
-        let scroll_max = self.scroll_max();
-        let scrollbar_el: AnyElement = if scroll_max > 1.0 && meas.view_h > 0.0 {
-            let content_h = (scroll_max + meas.view_h).max(1.0);
-            let thumb_h = (meas.view_h * meas.view_h / content_h).clamp(24.0, meas.view_h);
-            let thumb_y = self.scroll_px / scroll_max * (meas.view_h - thumb_h);
-            div()
-                .absolute()
-                .top(px(thumb_y))
-                .right(px(2.))
-                .w(px(4.))
-                .h(px(thumb_h))
-                .rounded_sm()
-                .bg(rgb(DIM))
-                .into_any_element()
-        } else {
-            div().into_any_element()
-        };
-        let meas_view = self.scroll_meas.clone();
-        let meas_end = self.scroll_meas.clone();
-        let meas_abs = self.scroll_meas.clone();
-        let scroll_offset = self.scroll_px;
 
         // ---- popup custom RGB: kanan-atas, hanya di tab Keyboard ----
         let popup_el: AnyElement = if self.show_rgb_popup && self.tab == Tab::Keyboard {
@@ -2629,27 +3938,28 @@ impl Render for RootView {
             div().into_any_element()
         };
 
+        let sidebar_w = if vw < 900.0 { 180.0 } else { 248.0 };
         div()
             .size_full()
             .flex()
             .flex_row()
             .relative()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(rgb(self.theme.bg))
+            .text_color(rgb(self.theme.text))
             .font_family(FONT)
             .text_sm()
-            // ===== sidebar =====
+            // ===== sidebar (tiling-friendly: narrower on small tiles) =====
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_2()
                     .p_3()
-                    .w(px(248.))
+                    .w(px(sidebar_w))
                     .h_full()
-                    .bg(rgb(PANEL))
+                    .bg(rgb(self.theme.panel))
                     .border_r_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(self.theme.border))
                     .child(
                         // header block
                         div()
@@ -2658,9 +3968,9 @@ impl Render for RootView {
                             .gap_1()
                             .p_3()
                             .rounded_md()
-                            .bg(rgb(PANEL))
+                            .bg(rgb(current_theme().panel))
                             .border_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(current_theme().border))
                             .child(
                                 div()
                                     .flex()
@@ -2676,7 +3986,7 @@ impl Render for RootView {
                                             .gap_2()
                                             .child(
                                                 div()
-                                                    .text_color(rgb(WHITE))
+                                                    .text_color(rgb(current_theme().white))
                                                     .text_size(px(26.))
                                                     .font_weight(gpui::FontWeight::BOLD)
                                                     .child("力".to_string()),
@@ -2687,22 +3997,32 @@ impl Render for RootView {
                                                     .flex_col()
                                                     .child(
                                                         div()
-                                                            .text_color(rgb(WHITE))
+                                                            .text_color(rgb(current_theme().white))
                                                             .text_sm()
                                                             .font_weight(gpui::FontWeight::BOLD)
                                                             .child("AXIOO".to_string()),
                                                     )
                                                     .child(
                                                         div()
-                                                            .text_color(rgb(DIM))
+                                                            .text_color(rgb(current_theme().dim))
                                                             .text_xs()
                                                             .child("//CONTROL_".to_string()),
                                                     ),
                                             ),
                                     )
-                                    .child(div().text_color(rgb(FAINT)).text_xs().child("///".to_string())),
+                                    .child(
+                                        div()
+                                            .text_color(rgb(current_theme().faint))
+                                            .text_xs()
+                                            .child("///".to_string()),
+                                    ),
                             )
-                            .child(div().text_color(rgb(FAINT)).text_xs().child(self.product.clone())),
+                            .child(
+                                div()
+                                    .text_color(rgb(current_theme().faint))
+                                    .text_xs()
+                                    .child(self.product.clone()),
+                            ),
                     )
                     .children(nav)
                     .child(div().flex_1())
@@ -2712,24 +4032,19 @@ impl Render for RootView {
                             .flex_col()
                             .gap_2()
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .px_2()
-                                            .rounded_sm()
-                                            .bg(rgb(PANEL2))
-                                            .border_1()
-                                            .border_color(rgb(BORDER))
-                                            .text_color(rgb(DIM))
-                                            .text_xs()
-                                            .child("STABLE // 01".to_string()),
-                                    ),
+                                div().flex().flex_row().items_center().gap_2().child(
+                                    div()
+                                        .px_2()
+                                        .rounded_sm()
+                                        .bg(rgb(current_theme().panel2))
+                                        .border_1()
+                                        .border_color(rgb(current_theme().border))
+                                        .text_color(rgb(current_theme().dim))
+                                        .text_xs()
+                                        .child("STABLE // 01".to_string()),
+                                ),
                             )
-                            .child(barcode())
+                            .child(barcode()),
                     ),
             )
             // ===== main column =====
@@ -2751,17 +4066,22 @@ impl Render for RootView {
                             .px_4()
                             .py_2()
                             .border_b_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(current_theme().border))
                             .child(
                                 div()
                                     .flex()
                                     .flex_row()
                                     .items_center()
                                     .gap_2()
-                                    .child(div().text_color(rgb(FAINT)).text_sm().child("— 力".to_string()))
                                     .child(
                                         div()
-                                            .text_color(rgb(DIM))
+                                            .text_color(rgb(current_theme().faint))
+                                            .text_sm()
+                                            .child("— 力".to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(rgb(current_theme().dim))
                                             .text_xs()
                                             .child(tab.section().to_string()),
                                     ),
@@ -2774,13 +4094,14 @@ impl Render for RootView {
                                     .gap_2()
                                     .child(status_pill(
                                         if is_root {
-                                            "● ROOT".to_string()
+                                            "● Admin".to_string()
                                         } else {
-                                            "○ USER".to_string()
+                                            "○ User".to_string()
                                         },
                                         is_root,
                                     ))
                                     .child(status_pill(ec_txt, ec_live))
+                                    .child(status_pill(daemon_txt, daemon_ok))
                                     .child(status_pill(self.data.stamp.clone(), false)),
                             ),
                     )
@@ -2794,90 +4115,27 @@ impl Render for RootView {
                             .pt_3()
                             .child(
                                 div()
-                                    .text_color(rgb(WHITE))
+                                    .text_color(rgb(current_theme().white))
                                     .text_size(px(32.))
                                     .font_weight(gpui::FontWeight::BOLD)
                                     .child(tab.label().to_string()),
                             )
-                            .child(div().text_color(rgb(DIM)).text_sm().child(tab.desc().to_string())),
+                            .child(
+                                div()
+                                    .text_color(rgb(current_theme().dim))
+                                    .text_sm()
+                                    .child(tab.desc(self.daemon_on).to_string()),
+                            ),
                     )
                     .child(
                         div()
                             .id(SharedString::from("scroll-body"))
                             .flex_1()
                             .min_h(px(0.))
-                            .relative()
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .mt(px(-scroll_offset))
-                                    .px_4()
-                                    .py_3()
-                                    .child(
-                                        canvas(
-                                            move |_bounds, _window, _cx| (),
-                                            move |bounds: Bounds<gpui::Pixels>,
-                                                  _: (),
-                                                  _: &mut Window,
-                                                  _: &mut App| {
-                                                let oy: f32 = bounds.origin.y.into();
-                                                let mut m = meas_view.get();
-                                                m.start_y = oy;
-                                                meas_view.set(m);
-                                            },
-                                        )
-                                        .w_full()
-                                        .h(px(1.)),
-                                    )
-                                    .child(content)
-                                    .child(
-                                        canvas(
-                                            move |_bounds, _window, _cx| (),
-                                            move |bounds: Bounds<gpui::Pixels>,
-                                                  _: (),
-                                                  _: &mut Window,
-                                                  _: &mut App| {
-                                                let oy: f32 = bounds.origin.y.into();
-                                                let h: f32 = bounds.size.height.into();
-                                                let mut m = meas_end.get();
-                                                m.end_y = oy + h;
-                                                meas_end.set(m);
-                                            },
-                                        )
-                                        .w_full()
-                                        .h(px(1.)),
-                                    ),
-                            )
-                            .child(scrollbar_el)
-                            .child(
-                                canvas(
-                                    move |_bounds, _window, _cx| (),
-                                    move |bounds: Bounds<gpui::Pixels>,
-                                          _: (),
-                                          _: &mut Window,
-                                          _: &mut App| {
-                                        let h: f32 = bounds.size.height.into();
-                                        let mut m = meas_abs.get();
-                                        m.view_h = h;
-                                        meas_abs.set(m);
-                                    },
-                                )
-                                .absolute()
-                                .top(px(0.))
-                                .bottom(px(0.))
-                                .left(px(0.))
-                                .right(px(0.)),
-                            )
-                            .on_scroll_wheel(|ev, window, cx| {
-                                if let Some(Some(root)) = window.root::<RootView>() {
-                                    cx.update_entity(&root, |v, _| {
-                                        let dy: f32 = ev.delta.pixel_delta(px(16.)).y.into();
-                                        v.scroll_px = (v.scroll_px + dy).clamp(0.0, v.scroll_max());
-                                    });
-                                    window.refresh();
-                                }
-                            }),
+                            .overflow_y_scroll()
+                            .px_4()
+                            .py_4()
+                            .child(content),
                     )
                     // bottom action bar
                     .child(
@@ -2890,7 +4148,7 @@ impl Render for RootView {
                             .px_4()
                             .py_2()
                             .border_t_1()
-                            .border_color(rgb(BORDER))
+                            .border_color(rgb(current_theme().border))
                             .child(
                                 div()
                                     .flex()
@@ -2902,7 +4160,7 @@ impl Render for RootView {
                                     .child(
                                         div()
                                             .flex_shrink_0()
-                                            .text_color(rgb(FAINT))
+                                            .text_color(rgb(current_theme().faint))
                                             .text_sm()
                                             .child("///".to_string()),
                                     )
@@ -2910,13 +4168,18 @@ impl Render for RootView {
                                         div()
                                             .flex_1()
                                             .min_w(px(0.))
-                                            .text_color(rgb(DIM))
+                                            .text_color(rgb(current_theme().dim))
                                             .text_xs()
                                             .truncate()
                                             .child(format!("■ {notice}")),
                                     ),
                             )
-                            .child(div().text_color(rgb(FAINT)).text_sm().child("制御 開".to_string())),
+                            .child(
+                                div()
+                                    .text_color(rgb(current_theme().faint))
+                                    .text_sm()
+                                    .child("制御 開".to_string()),
+                            ),
                     ),
             )
             .child(toast_el)
@@ -2942,7 +4205,11 @@ fn sample(s: &mut Sampler) -> SensorData {
     s.n += 1;
 
     let c = cpu::sample();
-    let cpu_temp_line = format!("{} / {}", f1(c.package_temp_c, "°C"), f1(c.max_core_temp_c, "°C"));
+    let cpu_temp_line = format!(
+        "{} / {}",
+        f1(c.package_temp_c, "°C"),
+        f1(c.max_core_temp_c, "°C")
+    );
     let cpu_freq_line = format!("{} / {}", f1(c.avg_mhz, "MHz"), f1(c.max_mhz, "MHz"));
     let max_temp_c = c
         .package_temp_c
@@ -2984,7 +4251,11 @@ fn sample(s: &mut Sampler) -> SensorData {
         .unwrap_or_default()
         .iter()
         .map(|g| GpuRow {
-            name: format!("{} · {}", g.name, g.temp_c.map_or("-".to_string(), |v| format!("{v:.0}°C"))),
+            name: format!(
+                "{} · {}",
+                g.name,
+                g.temp_c.map_or("-".to_string(), |v| format!("{v:.0}°C"))
+            ),
             usage_pct: g.usage_pct,
             temp_c: g.temp_c,
             power_w: g.power_w,
@@ -3004,7 +4275,8 @@ fn sample(s: &mut Sampler) -> SensorData {
             format!(
                 "{} {}% {} {}",
                 b.name,
-                b.capacity_pct.map_or("-".to_string(), |x| format!("{x:.0}")),
+                b.capacity_pct
+                    .map_or("-".to_string(), |x| format!("{x:.0}")),
                 b.status.as_deref().unwrap_or("?"),
                 f1(b.power_w, "W"),
             )
@@ -3012,7 +4284,10 @@ fn sample(s: &mut Sampler) -> SensorData {
         .collect();
 
     let (mem_pct, mem_line) = match memory::read() {
-        Some(m) => (Some(m.used_pct()), format!("{:.1} / {:.1} GB", m.used_gb(), m.total_gb())),
+        Some(m) => (
+            Some(m.used_pct()),
+            format!("{:.1} / {:.1} GB", m.used_gb(), m.total_gb()),
+        ),
         None => (None, "-".to_string()),
     };
 
@@ -3069,7 +4344,8 @@ fn sample(s: &mut Sampler) -> SensorData {
         kbd_brightness,
         kbd_rgb,
         kbd_zones,
-        stamp: format!("live · update #{}", s.n),
+        profile: None, // diisi thread sampler (poll daemon tiap 2 detik)
+        stamp: format!("Live #{}", s.n),
     }
 }
 
@@ -3107,9 +4383,14 @@ fn ensure_root_or_relaunch() {
     // Display/Wayland penting agar window root bisa dibuka di sesi user.
     // XAUTHORITY wajib eksplisit: tanpa ini Xlib jatuh ke /root/.Xauthority
     // ("Authorization required, but no authorization protocol specified").
-    let xauth = std::env::var("XAUTHORITY").ok().filter(|v| !v.is_empty()).or_else(|| {
-        std::env::var("HOME").ok().map(|h| format!("{h}/.Xauthority"))
-    });
+    let xauth = std::env::var("XAUTHORITY")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|h| format!("{h}/.Xauthority"))
+        });
     for (key, val) in [
         ("WAYLAND_DISPLAY", std::env::var("WAYLAND_DISPLAY").ok()),
         ("XDG_RUNTIME_DIR", std::env::var("XDG_RUNTIME_DIR").ok()),
@@ -3126,17 +4407,14 @@ fn ensure_root_or_relaunch() {
     cmd.args(&args);
     match cmd.status() {
         Ok(st) if st.success() => std::process::exit(0),
-        Ok(st) => eprintln!(
-            "axioo-control-center: pkexec dibatalkan/gagal ({st}); lanjut tanpa root."
-        ),
-        Err(e) => eprintln!(
-            "axio-control-center: pkexec tak bisa dijalankan ({e}); lanjut tanpa root."
-        ),
+        Ok(st) => {
+            eprintln!("axioo-control-center: auth cancelled ({st}), continuing without admin.")
+        }
+        Err(e) => eprintln!("axioo-control-center: auth failed ({e}), continuing without admin."),
     }
 }
 
 fn main() {
-    eprintln!("axioo-control-center: starting (GUI)…");
     ensure_root_or_relaunch();
     Application::new().run(|app: &mut App| {
         let product = dmi::read_dmi()
@@ -3154,9 +4432,18 @@ fn main() {
                 prev_t: Instant::now(),
                 n: 0,
             };
+            // Koneksi D-Bus dipakai ulang buat poll profil (~tiap 2 detik).
+            let dbus = zbus::blocking::Connection::system().ok();
+            let mut n: u64 = 0;
             loop {
                 std::thread::sleep(Duration::from_secs(1));
-                let data = sample(&mut s);
+                let mut data = sample(&mut s);
+                n += 1;
+                if n.is_multiple_of(2) {
+                    if let Some(conn) = &dbus {
+                        data.profile = Some(profile_client::query(conn));
+                    }
+                }
                 if tx.send(data).is_err() {
                     break;
                 }
@@ -3192,8 +4479,8 @@ fn main() {
             loop {
                 Timer::after(Duration::from_millis(250)).await;
                 ticks += 1;
-                // Autosave tiap ~5 detik (tanpa notify — tak ada perubahan visual).
-                let do_save = ticks % 20 == 0;
+                let do_save = ticks.is_multiple_of(20);
+                let check_matugen = ticks.is_multiple_of(8); // ~2s cek wallpaper → matugen
                 let mut latest: Option<SensorData> = None;
                 loop {
                     match rx.try_recv() {
@@ -3210,26 +4497,78 @@ fn main() {
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                     }
                 }
-                if latest.is_none() && apply_msgs.is_empty() && !do_save {
+                if latest.is_none() && apply_msgs.is_empty() && !do_save && !check_matugen {
                     continue;
                 }
                 if view
                     .update(cx, |v, cx| {
                         let mut changed = false;
-                        if let Some(data) = latest {
+                        if let Some(mut data) = latest {
+                            // Adopsi state daemon (sumber kebenaran bila jalan;
+                            // daemon sendiri mengikuti PPD → PPD luar tampil di sini).
+                            if let Some(ps) = data.profile.take() {
+                                let was_daemon = v.daemon_on;
+                                v.daemon_on = ps.daemon;
+                                if ps.daemon {
+                                    v.daemon_ppd = ps.ppd.clone();
+                                    v.daemon_duty = ps.fan_duty;
+                                    let diff = ps.profile != v.mode
+                                        || ps.quiet_fan != v.quiet_fan
+                                        || (!ps.curve.is_empty() && ps.curve != v.curve);
+                                    if diff {
+                                        v.mode = ps.profile.clone();
+                                        v.quiet_fan = ps.quiet_fan;
+                                        if !ps.curve.is_empty() {
+                                            v.curve = ps.curve.clone();
+                                        }
+                                        // Berubah dari luar (PPD/CLI) padahal
+                                        // sudah tersambung → beri tahu user.
+                                        if was_daemon {
+                                            let q = if v.quiet_fan { " + quiet" } else { "" };
+                                            v.toast = Some(Toast {
+                                                text: format!(
+                                                    "⬢ sinkron: {}{} (PPD {})",
+                                                    v.mode, q, ps.ppd
+                                                ),
+                                                at: Instant::now(),
+                                                error: false,
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    v.daemon_ppd = ps.ppd.clone();
+                                }
+                            }
                             v.data = data;
                             changed = true;
                         }
                         if !apply_msgs.is_empty() {
                             v.apply_busy = false;
                             if let Some(m) = apply_msgs.last().cloned() {
-                                let error = m.contains("gagal");
-                                v.toast = Some(Toast { text: m, at: Instant::now(), error });
+                                let error = m.to_ascii_lowercase().contains("failed")
+                                    || m.contains("gagal")
+                                    || m.contains("error");
+                                v.toast = Some(Toast {
+                                    text: m,
+                                    at: Instant::now(),
+                                    error,
+                                });
                             }
-                            v.notice = Some("siap.".to_string());
+                            v.notice = Some("Ready.".to_string());
                             changed = true;
                         }
-                        // Toast auto-hilang setelah 5 detik.
+                        // Matugen: follow wallpaper, auto-refresh every ~2s
+                        if v.theme.name == "matugen" && check_matugen {
+                            let fresh = Theme::matugen();
+                            if fresh.bg != v.theme.bg
+                                || fresh.panel != v.theme.panel
+                                || fresh.accent != v.theme.accent
+                            {
+                                v.theme = fresh;
+                                changed = true;
+                            }
+                        }
+                        // Toast auto-hide after 5s.
                         if let Some(t) = &v.toast {
                             if t.at.elapsed() > Duration::from_secs(5) {
                                 v.toast = None;
@@ -3251,7 +4590,6 @@ fn main() {
         })
         .detach();
     });
-    eprintln!("axioo-control-center: exited (semua window ditutup).");
 }
 
 #[cfg(test)]
@@ -3283,7 +4621,8 @@ mod tests {
     #[test]
     fn persisted_roundtrip() {
         let p = Persisted {
-            mode: Some("Quiet".to_string()),
+            mode: Some("Balanced".to_string()),
+            quiet_fan: Some(true),
             curve: Some(vec![(30, 40), (70, 80)]),
             fan_manual: Some(true),
             manual_duty: Some(55),
@@ -3291,7 +4630,8 @@ mod tests {
         };
         let s = serde_json::to_string(&p).unwrap();
         let q: Persisted = serde_json::from_str(&s).unwrap();
-        assert_eq!(q.mode.as_deref(), Some("Quiet"));
+        assert_eq!(q.mode.as_deref(), Some("Balanced"));
+        assert_eq!(q.quiet_fan, Some(true));
         assert_eq!(q.curve, Some(vec![(30, 40), (70, 80)]));
         assert_eq!(q.manual_duty, Some(55));
         // File rusak → default, bukan panic.
@@ -3300,7 +4640,8 @@ mod tests {
     }
 
     #[test]
-    fn rgb_slider_roundtrip() {        let (ch, v) = rgb_xy_to_val(60.0, 20.0, 300.0, 108.0);
+    fn rgb_slider_roundtrip() {
+        let (ch, v) = rgb_xy_to_val(60.0, 20.0, 300.0, 108.0);
         assert_eq!(ch, 0);
         let x = rgb_knob_x(v, 300.0);
         assert!((x - 60.0).abs() < 3.0);

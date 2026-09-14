@@ -20,7 +20,10 @@
 use std::fmt;
 use std::time::{Duration, Instant};
 
-use crate::fan::{self, EC_CMD_FAN_DUTY, EC_DATA, EC_FAN_INDEX_AUTO, EC_FAN_INDEX_CPU, EC_FAN_INDEX_GPU, EC_REG_FAN1_DUTY, EC_SC};
+use crate::fan::{
+    self, EC_CMD_FAN_DUTY, EC_DATA, EC_FAN_INDEX_AUTO, EC_FAN_INDEX_CPU, EC_FAN_INDEX_GPU,
+    EC_REG_FAN1_DUTY, EC_SC,
+};
 
 /// How long to wait for IBF=0 before giving up on one EC transaction.
 const IBF_TIMEOUT: Duration = Duration::from_millis(100);
@@ -51,7 +54,10 @@ impl fmt::Display for FanCtrlError {
             }
             FanCtrlError::IoPerm(e) => write!(f, "ioperm(0x62/0x66) failed: {e}"),
             FanCtrlError::IoTimeout { step } => {
-                write!(f, "EC timeout waiting IBF=0 during {step} (EC busy or unsupported)")
+                write!(
+                    f,
+                    "EC timeout waiting IBF=0 during {step} (EC busy or unsupported)"
+                )
             }
             FanCtrlError::VerifyMismatch { want_pct, got_pct } => write!(
                 f,
@@ -69,20 +75,30 @@ pub fn is_root() -> bool {
 }
 
 pub fn require_root() -> Result<(), FanCtrlError> {
-    if is_root() { Ok(()) } else { Err(FanCtrlError::NotRoot) }
+    if is_root() {
+        Ok(())
+    } else {
+        Err(FanCtrlError::NotRoot)
+    }
 }
 
 /// Pure: `(cmd, port, value)` triples for a manual duty on both fans.
 /// Duty clamped to the safe range; raw byte via [`fan::duty_pct_to_raw`].
 pub fn manual_triples(pct: u8) -> [(u8, u8, u8); 2] {
     let raw = fan::duty_pct_to_raw(pct);
-    [(EC_CMD_FAN_DUTY, EC_FAN_INDEX_CPU, raw), (EC_CMD_FAN_DUTY, EC_FAN_INDEX_GPU, raw)]
+    [
+        (EC_CMD_FAN_DUTY, EC_FAN_INDEX_CPU, raw),
+        (EC_CMD_FAN_DUTY, EC_FAN_INDEX_GPU, raw),
+    ]
 }
 
 /// Pure: triples restoring EC auto control on both fans
 /// (`port=0xFF`, `value`=fan index).
 pub fn auto_triples() -> [(u8, u8, u8); 2] {
-    [(EC_CMD_FAN_DUTY, EC_FAN_INDEX_AUTO, EC_FAN_INDEX_CPU), (EC_CMD_FAN_DUTY, EC_FAN_INDEX_AUTO, EC_FAN_INDEX_GPU)]
+    [
+        (EC_CMD_FAN_DUTY, EC_FAN_INDEX_AUTO, EC_FAN_INDEX_CPU),
+        (EC_CMD_FAN_DUTY, EC_FAN_INDEX_AUTO, EC_FAN_INDEX_GPU),
+    ]
 }
 
 // ---------- low-level x86 port I/O ----------
@@ -192,13 +208,24 @@ fn verify_mirror(want_pct: u8) -> Result<ApplyReport, FanCtrlError> {
         Ok(map) => {
             let got = fan::duty_raw_to_pct(map[EC_REG_FAN1_DUTY as usize]);
             if (got as i16 - want_pct as i16).abs() <= 2 {
-                Ok(ApplyReport { duty_pct: Some(want_pct), verified_pct: Some(got), verify_skipped: false })
+                Ok(ApplyReport {
+                    duty_pct: Some(want_pct),
+                    verified_pct: Some(got),
+                    verify_skipped: false,
+                })
             } else {
-                Err(FanCtrlError::VerifyMismatch { want_pct, got_pct: got })
+                Err(FanCtrlError::VerifyMismatch {
+                    want_pct,
+                    got_pct: got,
+                })
             }
         }
         // ec_sys absent/unreadable: write still happened, just unverified.
-        Err(_) => Ok(ApplyReport { duty_pct: Some(want_pct), verified_pct: None, verify_skipped: true }),
+        Err(_) => Ok(ApplyReport {
+            duty_pct: Some(want_pct),
+            verified_pct: None,
+            verify_skipped: true,
+        }),
     }
 }
 
@@ -210,7 +237,11 @@ pub fn set_manual_duty(pct: u8) -> Result<ApplyReport, FanCtrlError> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         for (i, (cmd, p, v)) in manual_triples(want).iter().enumerate() {
-            let step = if i == 0 { "fan-cpu duty" } else { "fan-gpu duty" };
+            let step = if i == 0 {
+                "fan-cpu duty"
+            } else {
+                "fan-gpu duty"
+            };
             port::ec_cmd(*cmd, *p, *v, step)?;
         }
     }
@@ -228,7 +259,11 @@ pub fn set_auto() -> Result<(), FanCtrlError> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         for (i, (cmd, p, v)) in auto_triples().iter().enumerate() {
-            let step = if i == 0 { "fan-cpu auto" } else { "fan-gpu auto" };
+            let step = if i == 0 {
+                "fan-cpu auto"
+            } else {
+                "fan-gpu auto"
+            };
             port::ec_cmd(*cmd, *p, *v, step)?;
         }
     }

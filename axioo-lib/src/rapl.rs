@@ -42,12 +42,10 @@ pub fn domains() -> Vec<RaplDomain> {
         }
         let name = read_trim_str(&format!("{base}/name")).unwrap_or_else(|| id.clone());
         let energy = read_trim_str(&format!("{base}/energy_uj")).and_then(|v| parse_u64(&v));
-        let max = read_trim_str(&format!("{base}/max_energy_range_uj"))
-            .and_then(|v| parse_u64(&v));
+        let max = read_trim_str(&format!("{base}/max_energy_range_uj")).and_then(|v| parse_u64(&v));
         let mut constraints = Vec::new();
         for n in 0..4u32 {
-            let cname =
-                read_trim_str(&format!("{base}/constraint_{n}_name")).unwrap_or_default();
+            let cname = read_trim_str(&format!("{base}/constraint_{n}_name")).unwrap_or_default();
             if cname.is_empty() {
                 continue;
             }
@@ -57,7 +55,13 @@ pub fn domains() -> Vec<RaplDomain> {
                 constraints.push((cname, uw / 1_000_000.0));
             }
         }
-        out.push(RaplDomain { id, name, energy_uj: energy, max_uj: max, constraints });
+        out.push(RaplDomain {
+            id,
+            name,
+            energy_uj: energy,
+            max_uj: max,
+            constraints,
+        });
     }
     out
 }
@@ -72,6 +76,10 @@ pub fn watts(before: &RaplDomain, after: &RaplDomain, dt_s: f64) -> Option<f64> 
         (Some(b), Some(a), Some(m)) => (b, a, m),
         _ => return None,
     };
-    let delta = if a >= b { a - b } else { max.saturating_sub(b).saturating_add(a) };
+    let delta = if a >= b {
+        a - b
+    } else {
+        max.saturating_sub(b).saturating_add(a)
+    };
     Some(delta as f64 / 1_000_000.0 / dt_s)
 }

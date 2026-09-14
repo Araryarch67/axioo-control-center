@@ -2,19 +2,22 @@
 
 Utilitas kontrol hardware untuk laptop Axioo (basis Clevo) di Linux, Rust.
 Pengganti Clevo Control Center Windows. Workspace Cargo: `axioo-lib`,
-`axioo-ctl`, `axioo-gui`. Docs: `docs/ec-fan-protocol.md`, `docs/kbd-backlight.md`.
+`axioo-ctl`, `axioo-gui`, `axiood`. Docs: `docs/ec-fan-protocol.md`, `docs/kbd-backlight.md`, `docs/packaging.md`, `docs/per-key-rgb.md`.
 
 ## Perintah
 
 ```sh
-cargo check --workspace               # ✅ hijau (termasuk axioo-gui)
+cargo check --workspace               # ✅ hijau (termasuk axioo-gui + axiood)
 cargo test -p axioo-lib               # unit test (protokol EC, kbd, kurva)
-cargo build -p axioo-lib -p axioo-ctl # build yang stabil
+cargo test -p axiood                  # daemon profile/PPD tests
 ./target/debug/axioo-ctl probe          # dump kapabilitas hardware
 ./target/debug/axioo-ctl monitor        # dashboard live
 ./target/debug/axioo-ctl fan dump       # butuh sudo + modprobe ec_sys
+./target/debug/axioo-ctl profile get    # via axiood + PPD
+./target/debug/axioo-ctl battery status # FlexiCharger thresholds
 ./target/debug/axioo-ctl kbd status     # status backlight keyboard
 ./target/debug/axioo-control-center     # GUI (butuh display wayland/X)
+sudo systemctl enable --now axiood     # daemon (EC + RAPL + PPD sync)
 ```
 
 > Jangan commit tanpa diminta eksplisit.
@@ -37,16 +40,16 @@ cargo build -p axioo-lib -p axioo-ctl # build yang stabil
 | # | Fitur | Status |
 |---|-------|--------|
 | 0 | `probe`, `monitor`, `kbd status/get/set`, docs, README+credits | ✅ selesai, terverifikasi di Pongo Studio X (2025) |
-| 1 | GUI live sensor (GPUI) | 🔄 COMPILE HIJAU + runtime stabil (2026-09-13: survive 6 dtk tanpa crash); redesign gaming-center DONE: sidebar nav (Dashboard/Performa/Kipas/Daya), mode strip Quiet/Balanced/Entertainment/Performance, gauge CPU canvas, chart kurva kipas canvas + editor titik, kartu GPU/Mem/Baterai/RAPL, pill status EC — butuh uji visual user + verify live update |
-| 2 | Backlight keyboard Studio X | ✅ quirk TERBUKTI (`packaging/clevo-drivers-axioo`, force 3-zone untuk tipe `0x17` + node ke-4 numpad via EC-direct `0x0B` ala System76): 4 node LED + tulis OK via CLI; panel GUI Keyboard DONE (status/brightness/preset+zona/visualizer) |
-| 3 | Kontrol kipas (`axioo-ctl fan`) | ✅ peta TERVALIDASI idle di Studio X (2026-09-13: `0x07`=61C vs pkg 64C, RPM EC persis = hwmon 2422/2015, konsisten 5+ sampel); tooling read-only DONE (`fan dump` + `fan watch` + `fan curve` + tests); konfirmasi tracking saat load DIPARKIR atas permintaan user → langsung desain `axiood` saat dibutuhkan |
-| 4 | Daemon `axiood` + D-Bus + profil | ⬜ belum mulai |
-| 5 | Profil CPU/GPU (RAPL, cpufreq, NVIDIA) | ⬜ belum mulai |
-| 6 | Charge threshold baterai | ⬜ belum mulai |
-| 7 | Fn-keys brightness di Hyprland | 🔄 LED ADA (quirk #2) + CLI `kbd brighter/dimmer` DONE; sisa bind di `hyprland.conf` ke input `TUXEDO Keyboard` |
-| 8 | Packaging AUR + systemd + udev | ⬜ belum mulai |
-| 9 | Upstream quirk ke clevo-drivers | ⬜ setelah #2 terbukti |
-| 10 | Per-key RGB sejati via EC | ⬜ riset; butuh reverse-engineering |
+| 1 | GUI live sensor (GPUI) | ✅ COMPILE HIJAU + runtime stabil; gaming-center DONE + fix kepotong Kipas 2026-09-14 (`vw<1280` responsive + `flex_wrap`): sidebar Dashboard/Performa/Kipas/Keyboard/Daya, gauge, chart kurva + editor drag, kartu GPU/Mem/Baterai/RAPL, pill EC — `cargo check` hijau |
+| 2 | Backlight keyboard Studio X | ✅ quirk TERBUKTI (`packaging/clevo-drivers-axioo`, force 3-zone `0x17` + numpad `0x0B`): 4 LED + tulis OK via CLI; panel GUI Keyboard DONE |
+| 3 | Kontrol kipas (`axioo-ctl fan`) | ✅ peta TERVALIDASI idle (2026-09-13: `0x07`=61C vs pkg 64C, RPM EC=hwmon 2422/2015, 5+ sampel); tooling read-only DONE (`fan dump/watch/curve` + tests) + one-shot `set/auto` via `fan_ctrl` (clamp 40-100%, verify `0xCE`) |
+| 4 | Daemon `axiood` + D-Bus + profil | ✅ crate `axiood` + `axioo-ctl profile` + `axioo-gui profile_client` two-way PPD sync (B→balanced/E+P→perf, `power-saver`→Balanced+quiet), EC fan loop + RAPL PL1/PL2, `com.axioo.Control` bus, `axiood.service` — `cargo test -p axiood` 2 ok |
+| 5 | Profil CPU/GPU (RAPL, cpufreq, NVIDIA) | ✅ RAPL `rapl_apply::apply_pl1_pl2` via axiood (Balanced 44/120W, Ent/Perf 44/160W); EPP/governor milik PPD (sengaja tidak disentuh); GPU `nvidia::gpus` probe OK, `power.limit` N/A di mesin ini |
+| 6 | Charge threshold baterai | ✅ `axioo-lib::battery` + `axioo-ctl battery status/get/set` (standard `charge_control_*`, BAT0 start 40-95 end 60-100); `axioo-ctl battery set --start/--end` validasi + butuh root |
+| 7 | Fn-keys brightness di Hyprland | ✅ `kbd brighter/dimmer` DONE + LED ada; bind Hyprland ditunda per permintaan (siap: `XF86KbdBrightnessUp/Down` → `axioo-ctl kbd brighter/dimmer`) |
+| 8 | Packaging AUR + systemd + udev | ✅ `packaging/aur/PKGBUILD` + `udev/99-axioo-kbd.rules` + `axiood.service` + `com.axioo.Control.*`; `setup.sh` install daemon/udev/dbus, `uninstall.sh` clean; docs `docs/packaging.md` |
+| 9 | Upstream quirk ke clevo-drivers | 🔄 patch siap `packaging/clevo-drivers-axioo/studiox-kbd-quirk.patch`; tunggu user minta kirim ke `nick42d/clevo-drivers` |
+| 10 | Per-key RGB sejati via EC | 🔄 riset terdokumentasi `docs/per-key-rgb.md`; butuh capture WMI/EC saat Control Center Windows per-key (zona `0xF3…`) — USB `048d:…` tak ada di mesin ini |
 
 ## Ide solusi per fitur
 

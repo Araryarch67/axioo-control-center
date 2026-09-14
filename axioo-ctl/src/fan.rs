@@ -35,7 +35,11 @@ pub fn dump() {
         "  0x{:02X} gpu_temp  raw {} ({})",
         fan::EC_REG_GPU_TEMP,
         snap.gpu_temp_raw,
-        if snap.gpu_temp_raw == 0 { "GPU idle/asleep" } else { "°C on validated models" },
+        if snap.gpu_temp_raw == 0 {
+            "GPU idle/asleep"
+        } else {
+            "°C on validated models"
+        },
     );
     println!(
         "  0x{:02X} fan1_duty raw {} (~{}%)",
@@ -62,10 +66,7 @@ pub fn dump() {
     // Neighbor bytes help spot alternate maps (e.g. GPU RPM at 0xD4/0xD5).
     println!(
         "  0xD4..0xD7     {:02X} {:02X} {:02X} {:02X} (alternates to compare under load)",
-        map[0xD4],
-        map[0xD5],
-        map[0xD6],
-        map[0xD7]
+        map[0xD4], map[0xD5], map[0xD6], map[0xD7]
     );
 
     println!("\n== cross-check vs hwmon (validasi read-only) ==");
@@ -73,7 +74,11 @@ pub fn dump() {
     match c.package_temp_c {
         Some(pkg) => {
             let diff = (pkg - snap.cpu_temp_raw as f64).abs();
-            let verdict = if diff <= 5.0 { "COCOK" } else { "BEDA — peta belum valid" };
+            let verdict = if diff <= 5.0 {
+                "COCOK"
+            } else {
+                "BEDA — peta belum valid"
+            };
             println!(
                 "  EC 0x07 = {}C  vs coretemp package = {pkg:.1}C  [{verdict}]",
                 snap.cpu_temp_raw
@@ -92,8 +97,11 @@ pub fn dump() {
             .map(|r| (r - f.rpm as i64).abs())
             .min()
             .unwrap_or(i64::MAX);
-        let verdict =
-            if closest <= 300 { "COCOK" } else { "BEDA — peta belum valid" };
+        let verdict = if closest <= 300 {
+            "COCOK"
+        } else {
+            "BEDA — peta belum valid"
+        };
         println!(
             "  hwmon {} = {} RPM  vs EC {} / {} RPM  [{verdict}]",
             f.label, f.rpm, snap.fan1_rpm, snap.fan2_rpm
@@ -115,8 +123,8 @@ pub fn watch(interval_s: f64, count: Option<u64>) {
     let interval = Duration::from_secs_f64(interval_s.max(0.2));
     println!("axioo-ctl fan watch (read-only, Ctrl-C to quit)");
     println!(
-        "{:>7} {:>6} {:>6} {:>6} {:>8} {:>8} {:>7} {}",
-        "t(s)", "ec_cpu", "ec_gpu", "duty%", "ec_rpm1", "ec_rpm2", "pkg", "hwmon_rpm"
+        "{:>7} {:>6} {:>6} {:>6} {:>8} {:>8} {:>7} hwmon_rpm",
+        "t(s)", "ec_cpu", "ec_gpu", "duty%", "ec_rpm1", "ec_rpm2", "pkg"
     );
     let t0 = Instant::now();
     let mut shown = 0u64;
@@ -150,7 +158,11 @@ pub fn watch(interval_s: f64, count: Option<u64>) {
             snap.fan1_rpm,
             snap.fan2_rpm,
             pkg,
-            if frpm.is_empty() { "-".to_string() } else { frpm },
+            if frpm.is_empty() {
+                "-".to_string()
+            } else {
+                frpm
+            },
         );
         shown += 1;
         if let Some(n) = count {
@@ -172,7 +184,11 @@ pub fn curve(temp_c: i32, duty: u8) {
     if next == duty {
         println!("  (di dalam hysteresis band — duty ditahan)");
     }
-    println!("  clamp aman: {}–{}% (di bawah ~40% kipas stall)", fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT);
+    println!(
+        "  clamp aman: {}–{}% (di bawah ~40% kipas stall)",
+        fan::MIN_FAN_DUTY_PCT,
+        fan::MAX_FAN_DUTY_PCT
+    );
 }
 
 /// `axioo-ctl fan set`: one-shot manual duty on both fans (needs root).

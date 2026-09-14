@@ -1,0 +1,16 @@
+[Unit]
+Description=Axioo Control daemon (EC fan curve + RAPL, PPD sync)
+After=power-profiles-daemon.service dbus.service
+Wants=power-profiles-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/axiood
+Restart=on-failure
+RestartSec=3
+# Butuh CAP_SYS_RAWIO (port EC 0x62/0x66) + sysfs powercap + ec_sys debugfs.
+CapabilityBoundingSet=CAP_SYS_RAWIO
+AmbientCapabilities=CAP_SYS_RAWIO
+
+[Install]
+WantedBy=multi-user.target

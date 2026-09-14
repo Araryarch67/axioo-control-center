@@ -4,7 +4,11 @@
 //! brightness + RGB over the kernel LED interface), with discovery and
 //! driver-scale handling instead of a hardcoded sysfs path.
 
-use axioo_lib::kbd;
+use axioo_lib::{kbd, kbd_effect::KbdEffect};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 pub fn status() {
     let devs = kbd::discover();
@@ -79,7 +83,9 @@ pub fn set(brightness: Option<u32>, rgb: Option<String>, preset: Option<String>,
         // reference tool keeps the slider value).
         let b = match brightness {
             Some(v) => v,
-            None => kbd::read_state(d).map(|s| s.brightness).unwrap_or(d.max_brightness),
+            None => kbd::read_state(d)
+                .map(|s| s.brightness)
+                .unwrap_or(d.max_brightness),
         };
         if dry_run {
             println!(
@@ -145,4 +151,96 @@ fn nudge(dir: i32) {
     if failed {
         std::process::exit(3);
     }
+}
+
+/// `axioo-ctl kbd effect <name>`: animasi userspace (butuh root, Ctrl-C untuk stop).
+/// `static` = stop animasi + kembali ke warna diam.
+pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>) {
+    let eff = match KbdEffect::parse(name) {
+        Some(e) => e,
+        None => {
+            eprintln!(
+                "error: unknown effect '{name}' (pilih: {})",
+                KbdEffect::all()
+                    .iter()
+                    .map(|e| e.as_str())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            );
+            std::process::exit(2);
+        }
+    };
+    if eff == KbdEffect::Static {
+        // stop: kembalikan ke warna base
+        let base = match (rgb, preset) {
+            (Some(s), _) => kbd::parse_rgb_arg(&s).unwrap_or((255, 255, 255)),
+            (None, Some(p)) => kbd::preset(&p).unwrap_or((255, 255, 255)),
+            _ => kbd::discover()
+                .first()
+                .and_then(kbd::read_state)
+                .map(|s| s.rgb)
+                .unwrap_or((255, 255, 255)),
+        };
+        let devs = kbd::discover();
+        if devs.is_empty() {
+            eprintln!("error: no LED found");
+            std::process::exit(1);
+        }
+        for d in &devs {
+            let b = kbd::read_state(d)
+                .map(|s| s.brightness)
+                .unwrap_or(d.max_brightness);
+            let _ = kbd::set(d, b, base);
+            println!("{} <- static rgb={},{},{}", d.name, base.0, base.1, base.2);
+        }
+        return;
+    }
+    let base = match (rgb, preset) {
+        (Some(s), _) => match kbd::parse_rgb_arg(&s) {
+            Some(v) => v,
+            None => {
+                eprintln!("error: bad --rgb R,G,B");
+                std::process::exit(2);
+            }
+        },
+        (None, Some(p)) => match kbd::preset(&p) {
+            Some(v) => v,
+            None => {
+                eprintln!("error: unknown preset '{p}'");
+                std::process::exit(2);
+            }
+        },
+        _ => (0, 180, 255), // default breathing: cyanish
+    };
+    let devs = kbd::discover();
+    if devs.is_empty() {
+        eprintln!("error: no keyboard-backlight LED found");
+        std::process::exit(1);
+    }
+    let brightness = devs
+        .first()
+        .map(|d| {
+            kbd::read_state(d)
+                .map(|s| s.brightness)
+                .unwrap_or(d.max_brightness)
+        })
+        .unwrap_or(255);
+    println!(
+        "effect {} base rgb={},{},{} brightness={} — Ctrl-C to stop",
+        eff.as_str(),
+        base.0,
+        base.1,
+        base.2,
+        brightness
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let s = stop.clone();
+    ctrlc_handler(s);
+    axioo_lib::kbd_effect::run_blocking(eff, base, brightness, stop);
+}
+
+fn ctrlc_handler(stop: Arc<AtomicBool>) {
+    let _ = ctrlc::set_handler(move || {
+        stop.store(true, Ordering::Relaxed);
+    });
 }

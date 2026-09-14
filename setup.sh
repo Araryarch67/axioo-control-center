@@ -3,7 +3,7 @@
 #   1. base driver (clevo-drivers-dkms-git dari AUR)
 #   2. patch quirk Studio X 0x17 (+ zona-4 numpad) + install DKMS
 #   3. build release + AppImage
-#   4. install AppImage ke ~/Applications + entri desktop
+#   4. install AppImage ke ~/.local/share/axioo-control-center + entri desktop
 #
 # Jalankan TANPA sudo (sudo diminta di langkah yang perlu):
 #   ./setup.sh
@@ -61,10 +61,32 @@ echo "=== [4/4] build + AppImage ==="
 "$HERE/script.sh"
 IMG="$(ls -t "$HERE"/dist/Axioo-Control-Center-*-x86_64.AppImage | head -1)"
 
+echo "=== [4b/4] axiood daemon + D-Bus + udev (sudo) ==="
+if [ -f "$HERE/target/release/axiood" ]; then
+    echo "install axiood + D-Bus config + systemd unit…"
+    sudo install -Dm755 "$HERE/target/release/axiood" /usr/bin/axiood
+    sudo install -Dm644 "$HERE/packaging/com.axioo.Control.conf" /etc/dbus-1/system.d/com.axioo.Control.conf
+    sudo install -Dm644 "$HERE/packaging/com.axioo.Control.policy" /usr/share/polkit-1/actions/com.axioo.Control.policy
+    sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
+    sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
+    sudo udevadm control --reload-rules 2>/dev/null || true
+    sudo systemctl daemon-reload
+    echo "enable & start axiood…"
+    sudo systemctl enable --now axiood 2>&1 | head -n 20 || true
+    echo "axiood: $(systemctl is-active axiood 2>/dev/null || echo unknown)"
+fi
+
 echo "=== install AppImage + axioo-ctl ==="
-mkdir -p "$HOME/Applications" "$HOME/.local/bin" "$HOME/.local/share/applications" \
+# JANGAN taruh di ~/Applications: appimagelauncherd menganggap folder itu
+# databasenya sendiri — AppImage yang dicopy manual di-rename (suffix md5),
+# di-unintegrate, dan file desktop kita ikut dibersihkan. Lokasi di bawah
+# ~/.local/share tak diawasi daemon sehingga instalasi manual awet.
+DESTDIR="$HOME/.local/share/axioo-control-center"
+mkdir -p "$DESTDIR" "$HOME/.local/bin" "$HOME/.local/share/applications" \
     "$HOME/.local/share/icons/hicolor/256x256/apps"
-cp "$IMG" "$HOME/Applications/"
+cp "$IMG" "$DESTDIR/"
+APPIMG="$DESTDIR/$(basename "$IMG")"
+chmod +x "$APPIMG"
 # Helper host agar fallback `pkexec axioo-ctl fan ...` dari GUI AppImage bisa
 # dieksekusi root (binary di dalam mount FUSE /tmp/.mount_* milik user tak
 # bisa diakses root → selalu "Permission denied").
@@ -73,7 +95,9 @@ if [ -f "$HERE/target/release/axioo-ctl" ]; then
     chmod +x "$HOME/.local/bin/axioo-ctl"
 fi
 cp "$HERE/packaging/appimage/$APPID.desktop" "$HOME/.local/share/applications/"
-sed -i "s|^Exec=.*|Exec=$HOME/Applications/$(basename "$IMG")|" \
+# APPIMAGELAUNCHER_DISABLE=1 agar AppImageLauncher tak memunculkan dialog
+# "integrate?" saat app dijalankan dari luar ~/Applications.
+sed -i "s|^Exec=.*|Exec=env APPIMAGELAUNCHER_DISABLE=1 \"$APPIMG\"|" \
     "$HOME/.local/share/applications/$APPID.desktop"
 cp "$HERE/dist/icon.png" "$HOME/.local/share/icons/hicolor/256x256/apps/$APPID.png"
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
@@ -81,5 +105,5 @@ update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 echo
 echo "OK semua:"
 echo "  driver : ls /sys/class/leds/ | grep kbd   (mesti ada rgb:kbd_backlight*)"
-echo "  app    : $HOME/Applications/$(basename "$IMG")"
+echo "  app    : $APPIMG"
 echo "  menu   : cari 'Axioo Control Center' di launcher"

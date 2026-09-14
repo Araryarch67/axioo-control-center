@@ -63,8 +63,11 @@ restarts in `~/.config/axioo-control-center/state.json`.
 ./target/debug/axioo-ctl probe
 ./target/debug/axioo-ctl monitor
 ./target/debug/axioo-ctl fan dump                 # needs root + ec_sys
+./target/debug/axioo-ctl profile get              # via axiood (PPD sync)
+./target/debug/axioo-ctl battery status           # FlexiCharger thresholds
 ./target/debug/axioo-ctl kbd status
 sudo ./target/debug/axioo-ctl kbd set --preset blue --brightness 255
+sudo ./target/debug/axioo-ctl battery set --start 80 --end 90
 ```
 
 ## Driver prerequisite (Pongo)
@@ -107,10 +110,13 @@ ad-hoc writes. See [`AGENTS.md`](AGENTS.md) and
 - [x] Fan map validation + one-shot control + draggable curve
 - [x] Keyboard quirk (0x17 → 3-zone + numpad via EC `0x0B`) + GUI panel
 - [x] FlexiCharger thresholds + AppImage + session persistence
-- [ ] `axiood` daemon (continuous curve/cap loop, D-Bus) — enables "max 50%" semantics
-- [ ] CPU/GPU profiles (RAPL, cpufreq, NVIDIA)
-- [ ] Fn-key binds in Hyprland (`kbd brighter/dimmer` is ready)
-- [ ] AUR packaging + upstream quirk to clevo-drivers
+- [x] `axiood` daemon (continuous curve/cap loop, D-Bus, two-way PPD sync; `cargo check --workspace` hijau)
+- [x] CPU/GPU profiles — RAPL PL1/PL2 via axiood (44/120W Balanced, 44/160W Perf/Ent), EPP/governor milik PPD, NVIDIA `power.limit` N/A di mesin ini (lihat `nvidia::gpus`)
+- [x] Battery CLI (`axioo-ctl battery status/get/set`) + FlexiCharger `charge_control_*` (BAT0: start 40-95, end 60-100)
+- [x] AUR packaging + udev + systemd (`packaging/aur/PKGBUILD`, `udev/99-axioo-kbd.rules`, `axiood.service`; `setup.sh` install + `uninstall.sh` clean)
+- [ ] Fn-key binds in Hyprland (`kbd brighter/dimmer` ready — tunda per permintaan)
+- [ ] Upstream quirk ke clevo-drivers (patch siap `packaging/clevo-drivers-axioo/`)
+- [ ] Per-key RGB sejati via EC (riset `docs/per-key-rgb.md`)
 
 ## FAQ
 

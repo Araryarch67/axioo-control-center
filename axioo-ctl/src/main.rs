@@ -1,7 +1,9 @@
+mod battery;
 mod fan;
 mod kbd;
 mod monitor;
 mod probe;
+mod profile;
 
 use clap::{Parser, Subcommand};
 
@@ -34,10 +36,20 @@ enum Cmd {
         #[command(subcommand)]
         cmd: FanCmd,
     },
+    /// Power profile via axiood (two-way sync dengan PPD).
+    Profile {
+        #[command(subcommand)]
+        cmd: ProfileCmd,
+    },
     /// Keyboard backlight: status / get / set (needs kbd LED driver).
     Kbd {
         #[command(subcommand)]
         cmd: KbdCmd,
+    },
+    /// Battery: status / get / set thresholds (FlexiCharger via charge_control_*).
+    Battery {
+        #[command(subcommand)]
+        cmd: BatteryCmd,
     },
 }
 
@@ -75,6 +87,22 @@ enum FanCmd {
 }
 
 #[derive(Subcommand)]
+enum ProfileCmd {
+    /// Show current axioo profile (+ quiet-fan + PPD).
+    Get,
+    /// Set profile: Balanced|Entertainment|Performance.
+    Set {
+        /// Profile name.
+        name: String,
+    },
+    /// Per-mode quiet-fan toggle: on|off|toggle|status.
+    QuietFan {
+        /// Action.
+        action: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum KbdCmd {
     /// Show driver/LED presence and current state, with fix hints.
     Status,
@@ -84,7 +112,7 @@ enum KbdCmd {
     Brighter,
     /// Turunkan brightness 1 langkah (untuk bind Fn-keys).
     Dimmer,
-    /// Set brightness and/or color.
+    /// Set brightness and/or color (mode static).
     Set {
         /// Raw brightness value (clamped to the driver's max_brightness).
         #[arg(short, long)]
@@ -98,6 +126,34 @@ enum KbdCmd {
         /// Print what would be written without writing.
         #[arg(long)]
         dry_run: bool,
+    },
+    /// RGB effect: static|breathing|wave|rainbow|cycle|aurora|twinkle|pulse|gradient|music|spectrum|reactive (Ctrl-C to stop).
+    Effect {
+        /// Effect name.
+        name: String,
+        /// Base color R,G,B (untuk breathing/static).
+        #[arg(long)]
+        rgb: Option<String>,
+        /// Preset color (alt to --rgb).
+        #[arg(long)]
+        preset: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BatteryCmd {
+    /// Show battery + thresholds + available steps.
+    Status,
+    /// Print current thresholds (start/end).
+    Get,
+    /// Set thresholds (butuh root). Validasi terhadap available list firmware.
+    Set {
+        /// Start threshold (charging starts when below).
+        #[arg(long)]
+        start: Option<u64>,
+        /// End threshold (charging stops when above).
+        #[arg(long)]
+        end: Option<u64>,
     },
 }
 
@@ -114,14 +170,28 @@ fn main() {
             FanCmd::Auto => fan::auto(),
             FanCmd::Ping => fan::ping(),
         },
+        Cmd::Profile { cmd } => match cmd {
+            ProfileCmd::Get => profile::get(),
+            ProfileCmd::Set { name } => profile::set(&name),
+            ProfileCmd::QuietFan { action } => profile::quiet_fan(&action),
+        },
         Cmd::Kbd { cmd } => match cmd {
             KbdCmd::Status => kbd::status(),
             KbdCmd::Get => kbd::get(),
             KbdCmd::Brighter => kbd::brighter(),
             KbdCmd::Dimmer => kbd::dimmer(),
-            KbdCmd::Set { brightness, rgb, preset, dry_run } => {
-                kbd::set(brightness, rgb, preset, dry_run)
-            }
+            KbdCmd::Set {
+                brightness,
+                rgb,
+                preset,
+                dry_run,
+            } => kbd::set(brightness, rgb, preset, dry_run),
+            KbdCmd::Effect { name, rgb, preset } => kbd::effect(&name, rgb, preset),
+        },
+        Cmd::Battery { cmd } => match cmd {
+            BatteryCmd::Status => battery::status(),
+            BatteryCmd::Get => battery::get(),
+            BatteryCmd::Set { start, end } => battery::set(start, end),
         },
     }
 }

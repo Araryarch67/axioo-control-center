@@ -73,10 +73,13 @@ pub fn discover() -> Vec<KbdBacklight> {
             .unwrap_or(255);
         let channels = read_trim(&dir.join("multi_index"))
             .map(|s| s.split_whitespace().map(str::to_lowercase).collect())
-            .unwrap_or_else(|| {
-                vec!["red".to_string(), "green".to_string(), "blue".to_string()]
-            });
-        out.push(KbdBacklight { name, dir, max_brightness: max, channels });
+            .unwrap_or_else(|| vec!["red".to_string(), "green".to_string(), "blue".to_string()]);
+        out.push(KbdBacklight {
+            name,
+            dir,
+            max_brightness: max,
+            channels,
+        });
     }
     out
 }
@@ -125,12 +128,17 @@ impl fmt::Display for SetError {
 /// Channel values are ordered per the device's `multi_index`.
 pub fn set(kb: &KbdBacklight, brightness: u32, rgb: (u8, u8, u8)) -> Result<(), SetError> {
     if !kb.dir.exists() {
-        return Err(SetError::NoDevice { detail: format!("{} absent", kb.dir.display()) });
+        return Err(SetError::NoDevice {
+            detail: format!("{} absent", kb.dir.display()),
+        });
     }
     let b = brightness.min(kb.max_brightness);
     fs::write(kb.dir.join("brightness"), b.to_string()).map_err(SetError::Io)?;
-    fs::write(kb.dir.join("multi_intensity"), map_channels(&kb.channels, rgb))
-        .map_err(SetError::Io)?;
+    fs::write(
+        kb.dir.join("multi_intensity"),
+        map_channels(&kb.channels, rgb),
+    )
+    .map_err(SetError::Io)?;
     Ok(())
 }
 

@@ -38,7 +38,7 @@ pub fn batteries() -> Vec<Battery> {
         let u = |v: Option<String>| v.and_then(|s| parse_f64(&s)).map(|x| x / 1_000_000.0);
         let volt = u(get("voltage_now"));
         let amp = u(get("current_now"));
-        let power = u(get("power_now")).or_else(|| match (volt, amp) {
+        let power = u(get("power_now")).or(match (volt, amp) {
             (Some(v), Some(a)) => Some(v * a),
             _ => None,
         });
@@ -53,8 +53,7 @@ pub fn batteries() -> Vec<Battery> {
             cycle_count: get("cycle_count").and_then(|s| s.parse().ok()),
             charge_start_threshold: get("charge_control_start_threshold")
                 .and_then(|s| s.parse().ok()),
-            charge_end_threshold: get("charge_control_end_threshold")
-                .and_then(|s| s.parse().ok()),
+            charge_end_threshold: get("charge_control_end_threshold").and_then(|s| s.parse().ok()),
         });
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -64,10 +63,13 @@ pub fn batteries() -> Vec<Battery> {
 /// Discrete steps the firmware accepts, e.g. `[40, 50, 60, 70, 80, 95]`.
 /// `which` is `"start"` or `"end"`. Empty when unsupported/unreadable.
 pub fn charge_available(name: &str, which: &str) -> Vec<u64> {
-    let path = format!("/sys/class/power_supply/{name}/charge_control_{which}_available_thresholds");
+    let path =
+        format!("/sys/class/power_supply/{name}/charge_control_{which}_available_thresholds");
     read_trim_str(&path)
         .map(|s| {
-            s.split_whitespace().filter_map(|p| p.parse().ok()).collect()
+            s.split_whitespace()
+                .filter_map(|p| p.parse().ok())
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -75,9 +77,15 @@ pub fn charge_available(name: &str, which: &str) -> Vec<u64> {
 /// Failure modes for [`set_charge_thresholds`].
 #[derive(Debug)]
 pub enum ChargeError {
-    NoDevice { detail: String },
+    NoDevice {
+        detail: String,
+    },
     /// Value not in the firmware's available list.
-    NotAllowed { which: String, value: u64, allowed: Vec<u64> },
+    NotAllowed {
+        which: String,
+        value: u64,
+        allowed: Vec<u64>,
+    },
     Io(io::Error),
 }
 
@@ -85,8 +93,16 @@ impl fmt::Display for ChargeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ChargeError::NoDevice { detail } => write!(f, "no battery {detail}"),
-            ChargeError::NotAllowed { which, value, allowed } => {
-                let list = allowed.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+            ChargeError::NotAllowed {
+                which,
+                value,
+                allowed,
+            } => {
+                let list = allowed
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 write!(f, "{which} threshold {value} not allowed (pilih: {list})")
             }
             ChargeError::Io(e) if e.kind() == io::ErrorKind::PermissionDenied => write!(
@@ -109,15 +125,27 @@ pub fn set_charge_thresholds(
 ) -> Result<(), ChargeError> {
     let base = format!("/sys/class/power_supply/{name}");
     if !std::path::Path::new(&base).exists() {
-        return Err(ChargeError::NoDevice { detail: format!("{base} absent") });
+        return Err(ChargeError::NoDevice {
+            detail: format!("{base} absent"),
+        });
     }
-    for (which, val) in [("start", start), ("end", end)].into_iter().filter_map(|(w, v)| v.map(|x| (w, x))) {
+    for (which, val) in [("start", start), ("end", end)]
+        .into_iter()
+        .filter_map(|(w, v)| v.map(|x| (w, x)))
+    {
         let allowed = charge_available(name, which);
         if !allowed.is_empty() && !allowed.contains(&val) {
-            return Err(ChargeError::NotAllowed { which: which.to_string(), value: val, allowed });
+            return Err(ChargeError::NotAllowed {
+                which: which.to_string(),
+                value: val,
+                allowed,
+            });
         }
-        fs::write(format!("{base}/charge_control_{which}_threshold"), val.to_string())
-            .map_err(ChargeError::Io)?;
+        fs::write(
+            format!("{base}/charge_control_{which}_threshold"),
+            val.to_string(),
+        )
+        .map_err(ChargeError::Io)?;
     }
     Ok(())
 }

@@ -52,7 +52,7 @@ pub fn duty_raw_to_pct(raw: u8) -> u8 {
 /// Raw hi/lo RPM registers -> RPM (`2156220 / raw16`, 0 when stopped).
 pub fn rpm_from_regs(hi: u8, lo: u8) -> u32 {
     let raw = ((hi as u32) << 8) | lo as u32;
-    if raw == 0 { 0 } else { 2156220 / raw }
+    2156220u32.checked_div(raw).unwrap_or(0)
 }
 
 /// Decoded fan-relevant EC registers (read-only view, no I/O here).
@@ -105,8 +105,15 @@ pub fn snapshot(map: &[u8; 256]) -> FanSnapshot {
 
 /// Reference curve breakpoints mirroring [`auto_duty_step`], as editable
 /// `(temp_c, duty_pct)` points for UI/daemon configuration.
-pub const REFERENCE_CURVE: [(i32, u8); 7] =
-    [(20, 40), (30, 50), (40, 60), (50, 70), (60, 80), (70, 90), (80, 100)];
+pub const REFERENCE_CURVE: [(i32, u8); 7] = [
+    (20, 40),
+    (30, 50),
+    (40, 60),
+    (50, 70),
+    (60, 80),
+    (70, 90),
+    (80, 100),
+];
 
 /// Stepwise curve lookup over caller-owned `(temp_c, duty_pct)` points.
 /// Returns the duty of the last point with threshold <= `temp_c`;
@@ -123,10 +130,9 @@ pub fn curve_duty(points: &[(i32, u8)], temp_c: i32) -> u8 {
             break;
         }
     }
-    duty.or_else(|| points.first().map(|&(_, d)| d)).unwrap_or(MIN_FAN_DUTY_PCT).clamp(
-        MIN_FAN_DUTY_PCT,
-        MAX_FAN_DUTY_PCT,
-    )
+    duty.or_else(|| points.first().map(|&(_, d)| d))
+        .unwrap_or(MIN_FAN_DUTY_PCT)
+        .clamp(MIN_FAN_DUTY_PCT, MAX_FAN_DUTY_PCT)
 }
 
 /// Reference auto-curve step (with hysteresis), mirroring the C tool.
@@ -184,7 +190,10 @@ mod tests {
         for pct in [40u8, 50, 70, 100] {
             let raw = duty_pct_to_raw(pct);
             let back = duty_raw_to_pct(raw);
-            assert!((back as i16 - pct as i16).abs() <= 1, "{pct} -> {raw} -> {back}");
+            assert!(
+                (back as i16 - pct as i16).abs() <= 1,
+                "{pct} -> {raw} -> {back}"
+            );
         }
     }
 
@@ -231,8 +240,16 @@ mod tests {
         let snap = snapshot(&map);
         assert_eq!(snap.cpu_temp_raw, 55);
         assert_eq!(snap.gpu_temp_raw, 0);
-        assert!((snap.fan1_duty_pct as i16 - 70).abs() <= 1, "got {}", snap.fan1_duty_pct);
-        assert!((snap.fan1_rpm as i32 - 2400).abs() < 50, "got {}", snap.fan1_rpm);
+        assert!(
+            (snap.fan1_duty_pct as i16 - 70).abs() <= 1,
+            "got {}",
+            snap.fan1_duty_pct
+        );
+        assert!(
+            (snap.fan1_rpm as i32 - 2400).abs() < 50,
+            "got {}",
+            snap.fan1_rpm
+        );
         assert_eq!(snap.fan2_rpm, 0);
         assert_eq!(snap.max_temp_c(), 55);
     }
