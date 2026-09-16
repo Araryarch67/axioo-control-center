@@ -159,17 +159,32 @@ IMG="$HERE/dist/$(basename "$IMG")"
 log "AppImage: $IMG"
 
 log "=== [4b/4] axiood daemon + D-Bus + udev (sudo) ==="
+# Verifikasi daemon benar jalan; gagal = error keras (bukan diam).
+check_axiood() {
+    if systemctl is-active --quiet axiood; then
+        log "axiood: active"
+        return 0
+    fi
+    echo "ERROR: axiood tidak jalan habis install:"
+    systemctl status axiood --no-pager 2>&1 | head -n 15 || true
+    journalctl -u axiood --no-pager -n 15 2>&1 | tail -n 15 || true
+    return 1
+}
 _daemon_install_silent() {
     sudo install -Dm755 "$HERE/target/release/axiood" /usr/bin/axiood
     sudo install -Dm644 "$HERE/packaging/com.axioo.Control.conf" /etc/dbus-1/system.d/com.axioo.Control.conf
     sudo install -Dm644 "$HERE/packaging/com.axioo.Control.policy" /usr/share/polkit-1/actions/com.axioo.Control.policy
+    # Hapus bayangan unit lama (install-system.sh dulu taruh di /etc yang
+    # menimpa /usr/lib) agar unit baru pasti yang dipakai.
+    sudo rm -f /etc/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
     sudo udevadm control --reload-rules || true
     sudo systemctl daemon-reload
-    sudo systemctl enable --now axiood || true
+    sudo systemctl enable --now axiood
     # Default kipas = EC auto (instalasi lama perlu disetel eksplisit sekali).
     busctl --system call com.axioo.Control /com/axioo/Control com.axioo.Control SetFanEcAuto b true || true
+    check_axiood
 }
 if [ -f "$HERE/target/release/axiood" ]; then
     log "install axiood + D-Bus config + systemd unit…"
@@ -179,13 +194,15 @@ if [ -f "$HERE/target/release/axiood" ]; then
         sudo install -Dm755 "$HERE/target/release/axiood" /usr/bin/axiood
         sudo install -Dm644 "$HERE/packaging/com.axioo.Control.conf" /etc/dbus-1/system.d/com.axioo.Control.conf
         sudo install -Dm644 "$HERE/packaging/com.axioo.Control.policy" /usr/share/polkit-1/actions/com.axioo.Control.policy
+        # Hapus bayangan unit lama (lihat _daemon_install_silent).
+        sudo rm -f /etc/systemd/system/axiood.service
         sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
         sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
         sudo udevadm control --reload-rules 2>/dev/null || true
         sudo systemctl daemon-reload
         echo "enable & start axiood…"
         sudo systemctl enable --now axiood 2>&1 | head -n 20 || true
-        echo "axiood: $(systemctl is-active axiood 2>/dev/null || echo unknown)"
+        check_axiood
     fi
     # Default kipas = EC auto: daemon baru default true + instalasi lama
     # disetel eksplisit di _daemon_install_silent (quiet) / di bawah (verbose).

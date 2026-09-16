@@ -62,9 +62,13 @@ spin_wait() { # $1 step, $2 label, $3 pid → spinner sampai pid selesai (gagal 
     bar "$step" "$label ✓"; echo
 }
 : >"$LOGFILE"
+# say(): verbose → stdout, quiet → log saja.
+say()  { if [ "$QUIET" = 1 ]; then printf '%s\n' "$*" >>"$LOGFILE"; else printf '%s\n' "$*"; fi; }
 
 for a in "$@"; do
     case "$a" in
+        -v|--verbose) QUIET=0 ;;
+        -q|--quiet|--silent) QUIET=1 ;;
         -h|--help)
             sed -n '2,/^set /p' "$0" | grep -v '^set ' | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -85,7 +89,6 @@ if [ -n "$SUDO" ]; then
 fi
 shopt -s nullglob
 
-say()  { printf '%s\n' "$*"; }
 rm_one() { # $1 = deskripsi, $@ = files/glob (boleh kosong)
     local desc="$1"; shift
     if [ "$#" -eq 0 ]; then say "  - $desc: tidak ada, lewati"; return; fi
@@ -115,6 +118,7 @@ check() { # $1 = deskripsi, $2.. = path yang HARUS sudah hilang
 }
 
 say "=== uninstall total ($APPID) ==="
+[ "$QUIET" = 1 ] && echo "axioo uninstall — progress (log: $LOGFILE)"
 
 # ---------- A. daemon axiood ----------
 say "[A] daemon axiood"
@@ -157,6 +161,7 @@ if have udevadm; then
     $SUDO udevadm trigger --subsystem-match=power_supply --action=add 2>/dev/null || true
 fi
 say "  - systemd + udev di-reload"
+[ "$QUIET" = 1 ] && { bar 1 "daemon ✓"; echo; }
 
 # ---------- B. aplikasi (user) ----------
 say "[B] aplikasi (user $HOME)"
@@ -185,6 +190,7 @@ if have gtk-update-icon-cache; then
     gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 fi
 say "  - desktop-db + icon cache di-refresh"
+[ "$QUIET" = 1 ] && { bar 2 "aplikasi ✓"; echo; }
 
 # ---------- C. artefak repo + cache downloader ----------
 say "[C] artefak repo"
@@ -198,6 +204,7 @@ if [ "${KEEP_CACHE:-0}" = "1" ]; then
 else
     rm_one "cache downloader .tools" "$HERE"/.tools
 fi
+[ "$QUIET" = 1 ] && { bar 3 "artefak repo ✓"; echo; }
 
 # ---------- D. build cache ----------
 say "[D] build cache"
@@ -205,6 +212,7 @@ rm_one "cargo target" "$HERE"/target
 rm_one "tauri bundle output" "$HERE"/tauri-app/src-tauri/target
 rm_one "node_modules" "$HERE"/tauri-app/node_modules
 rm_one "output vite" "$HERE"/tauri-app/dist
+[ "$QUIET" = 1 ] && { bar 4 "build cache ✓"; echo; }
 
 # ---------- E. driver DKMS custom ----------
 if [ "${KEEP_DRIVER:-0}" = "1" ]; then
@@ -235,7 +243,12 @@ else
             say "  - pasang ulang bawaan: $mod/$ver (kernel aktif)"
             # TANPA --all: dkms-3.x menolak `install module/ver --all`
             # ("The action install does not support the --all parameter").
-            $SUDO dkms install "$mod/$ver" 2>&1 | tail -n 3 || true
+            if [ "$QUIET" = 1 ]; then
+                $SUDO dkms install "$mod/$ver" >>"$LOGFILE" 2>&1 & _dkpid=$!
+                spin_wait 5 "driver ($mod)" "$_dkpid"
+            else
+                $SUDO dkms install "$mod/$ver" 2>&1 | tail -n 3 || true
+            fi
             RESTORED=1
         fi
     done
@@ -250,6 +263,7 @@ else
         say "    install ulang (./setup.sh) atau reboot + reinstall driver. Bila ragu, reboot."
     fi
 fi
+[ "$QUIET" = 1 ] && { bar 5 "driver ✓"; echo; }
 
 # ---------- verifikasi ----------
 say
@@ -297,6 +311,17 @@ else
         LEFTOVER=1; say "  SISA DKMS custom masih terdaftar (dkms status)"
     else say "  OK  DKMS custom bersih"; fi
     check "source DKMS custom" /usr/src/tuxedo-drivers-axioo-*
+fi
+
+if [ "$QUIET" = 1 ]; then
+    bar 6 "verifikasi ✓"; echo
+    if [ "$LEFTOVER" -eq 0 ]; then
+        echo "OK: bersih total — daemon, app, cache, driver custom hilang."
+        exit 0
+    fi
+    echo "BELUM BERSIH TOTAL (detail: $LOGFILE):"
+    grep "SISA" "$LOGFILE" | head -20 || true
+    exit 1
 fi
 
 say

@@ -1,7 +1,10 @@
 [Unit]
 Description=Axioo Control daemon (EC fan curve + RAPL, PPD sync)
+# After SAJA tanpa Wants: Wants terbukti menarik PPD ke transaksi start
+# axiood dan menimbulkan ordering cycle saat boot (systemd lalu me-skip
+# start axiood → "offline" padahal enabled). Daemon tahan tanpa PPD
+# (fallback Balanced), jadi dependensi keras tak diperlukan.
 After=power-profiles-daemon.service dbus.service
-Wants=power-profiles-daemon.service
 
 [Service]
 Type=simple

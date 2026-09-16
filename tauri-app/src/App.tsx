@@ -296,7 +296,7 @@ function Performance({ snap, busy, run }: { snap: Snapshot | null; busy: boolean
         <Stat label="Package power" value={fmt1(snap?.pkg_watts, "W")} sub="Balanced 44/120W · Ent/Perf 44/160W" />
       </Card>
       {!snap?.profile.daemon && (
-        <p className="col-span-12 font-mono text-[11.5px] text-accent">axiood offline — jalankan ./install-system.sh lalu restart app.</p>
+        <p className="col-span-12 font-mono text-[11.5px] text-accent">axiood offline — jalankan ./setup.sh lalu restart app.</p>
       )}
     </div>
   );
