@@ -108,3 +108,20 @@ export const EFFECTS: Array<{ id: string; label: string; desc: string }> = [
   { id: "spectrum", label: "Spectrum", desc: "band per zona (simulasi)" },
   { id: "reactive", label: "Reactive", desc: "flash (placeholder)" },
 ];
+
+/**
+ * Efek rear exhaust — dikurasi untuk 1 zona (EC 0x07).
+ * wave/gradient/spectrum disengaja DIBUANG: di 1 zona wave == rainbow,
+ * gradient = merah statis, spectrum ≈ music. Deskripsi beda dari keyboard
+ * karena perilakunya memang beda di single LED.
+ */
+export const REAR_EFFECTS: Array<{ id: string; label: string; desc: string }> = [
+  { id: "follow", label: "Follow", desc: "ikut efek keyboard" },
+  { id: "breathing", label: "Breathing", desc: "fade warna pilihan" },
+  { id: "rainbow", label: "Rainbow", desc: "hue berputar" },
+  { id: "cycle", label: "Cycle", desc: "6 preset bergantian" },
+  { id: "aurora", label: "Aurora", desc: "pastel lambat" },
+  { id: "twinkle", label: "Twinkle", desc: "kedip warna acak" },
+  { id: "pulse", label: "Pulse", desc: "detak jantung" },
+  { id: "music", label: "Music", desc: "denyut beat (simulasi)" },
+];

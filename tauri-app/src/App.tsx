@@ -4,7 +4,7 @@ import {
   Minus, Monitor, Power, Settings as SettingsIcon, Square, X, Zap,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { api, EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
+import { api, EFFECTS, REAR_EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
 import { useStore, applyTheme, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
 import { cn, curveDuty, fmt1, hexToRgb } from "@/lib/utils";
@@ -625,16 +625,26 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
           </>
         )}
         {rearIdx >= 0 && (
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-hair pt-4">
-            <span className="text-[12px] font-extrabold uppercase text-dim">Rear exhaust</span>
-            <select value={rearFx} onChange={(e) => pickRear(e.target.value)}
-              className="field !w-auto cursor-pointer" title="Animasi independen lightbar belakang (EC 0x07)">
-              <option value="follow">Follow keyboard</option>
-              {EFFECTS.filter((e) => e.id !== "static").map((e) => (
-                <option key={e.id} value={e.id}>{e.label} — {e.desc}</option>
+          <div className="mt-4 border-t border-hair pt-4">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="text-[12px] font-extrabold uppercase tracking-[0.12em] text-dim">Rear exhaust · 1 zona</span>
+              {rearActive && <Chip on color="ok">rear {rearFx} · keyboard tetap</Chip>}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {REAR_EFFECTS.map((e) => (
+                <button key={e.id} title={e.desc} onClick={() => pickRear(e.id)}
+                  className={cn("rounded border-2 p-2 text-left transition-all",
+                    rearFx === e.id
+                      ? "border-black bg-accent"
+                      : "border-hair hover:border-dim")}
+                  style={rearFx === e.id
+                    ? { color: "rgb(var(--accent-ink))", boxShadow: "3px 3px 0 #000" }
+                    : undefined}>
+                  <div className="text-[12px] font-black uppercase italic">{e.label}</div>
+                  <div className={cn("mt-0.5 text-[10px]", rearFx === e.id ? "opacity-70" : "text-faint")}>{e.desc}</div>
+                </button>
               ))}
-            </select>
-            {rearActive && <Chip on color="ok">rear {rearFx} · keyboard tetap</Chip>}
+            </div>
           </div>
         )}
       </Card>
