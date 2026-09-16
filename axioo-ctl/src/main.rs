@@ -137,6 +137,9 @@ enum KbdCmd {
         /// Preset color (alt to --rgb).
         #[arg(long)]
         preset: Option<String>,
+        /// Animasi independen rear exhaust (butuh 5 node); "follow" = ikut utama.
+        #[arg(long)]
+        rear: Option<String>,
     },
 }
 
@@ -186,7 +189,7 @@ fn main() {
                 preset,
                 dry_run,
             } => kbd::set(brightness, rgb, preset, dry_run),
-            KbdCmd::Effect { name, rgb, preset } => kbd::effect(&name, rgb, preset),
+            KbdCmd::Effect { name, rgb, preset, rear } => kbd::effect(&name, rgb, preset, rear),
         },
         Cmd::Battery { cmd } => match cmd {
             BatteryCmd::Status => battery::status(),

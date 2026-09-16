@@ -52,6 +52,8 @@ export interface Snapshot {
   bat_writable: boolean;
   /** Efek RGB aktif ("static" = warna diam). */
   kbd_effect: string;
+  /** Efek rear exhaust ("follow" = ikut efek utama). */
+  kbd_rear_effect: string;
   /** Pengali kecepatan efek (1.0 = normal). */
   kbd_effect_speed: number;
   profile: ProfileState;
@@ -74,8 +76,8 @@ export const api = {
   clearFanOverride: () => invoke<string>("clear_fan_override"),
   kbdSet: (zone: number | null, brightness: number, r: number, g: number, b: number) =>
     invoke<string>("kbd_set", { args: { zone, brightness, r, g, b } }),
-  kbdEffectStart: (effect: string, r: number, g: number, b: number, brightness: number, speed: number) =>
-    invoke<string>("kbd_effect_start", { args: { effect, r, g, b, brightness, speed } }),
+  kbdEffectStart: (effect: string, r: number, g: number, b: number, brightness: number, speed: number, rear?: string) =>
+    invoke<string>("kbd_effect_start", { args: { effect, r, g, b, brightness, speed, rear: rear ?? "follow" } }),
   kbdEffectStop: () => invoke<string>("kbd_effect_stop"),
   batterySet: (start: number | null, end: number | null) =>
     invoke<string>("battery_set", { start, end }),

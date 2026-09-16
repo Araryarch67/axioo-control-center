@@ -30,7 +30,6 @@ ensure_deps() {
   if [[ ! -d node_modules ]]; then
     log "node_modules belum ada — npm install…"
     npm install --no-audit --no-fund
-    npm install-scripts approve esbuild >/dev/null 2>&1 || true
   fi
   if [[ ! -x node_modules/.bin/vite ]]; then
     log "vite tidak ditemukan — npm install…"

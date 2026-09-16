@@ -14,10 +14,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 axioo-lib = { path = "../../axioo-lib" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zbus = { version = "5", features = ["blocking"] }
+tauri-plugin-autostart = "2"
 
 [features]
 default = ["custom-protocol"]

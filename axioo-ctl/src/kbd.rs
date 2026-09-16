@@ -155,7 +155,20 @@ fn nudge(dir: i32) {
 
 /// `axioo-ctl kbd effect <name>`: animasi userspace (butuh root, Ctrl-C untuk stop).
 /// `static` = stop animasi + kembali ke warna diam.
-pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>) {
+/// `--rear <fx>` = animasi independen untuk lightbar belakang (butuh 5 node);
+/// keyboard dibiarkan bila efek utama `static`.
+pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>, rear: Option<String>) {
+    let rear_fx = match rear {
+        None => None,
+        Some(r) if r.eq_ignore_ascii_case("follow") || r.is_empty() => None,
+        Some(r) => match KbdEffect::parse(&r) {
+            Some(e) => Some(e),
+            None => {
+                eprintln!("error: unknown rear effect '{r}'");
+                std::process::exit(2);
+            }
+        },
+    };
     let eff = match KbdEffect::parse(name) {
         Some(e) => e,
         None => {
@@ -170,7 +183,7 @@ pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>) {
             std::process::exit(2);
         }
     };
-    if eff == KbdEffect::Static {
+    if eff == KbdEffect::Static && rear_fx.is_none() {
         // stop: kembalikan ke warna base
         let base = match (rgb, preset) {
             (Some(s), _) => kbd::parse_rgb_arg(&s).unwrap_or((255, 255, 255)),
@@ -236,7 +249,70 @@ pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>) {
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
     ctrlc_handler(s);
-    axioo_lib::kbd_effect::run_blocking(eff, base, brightness, 1.0, stop);
+    run_split(eff, rear_fx, base, brightness, 1.0, stop);
+}
+
+/// Loop gabungan CLI (sama seperti split loop backend GUI): zona keyboard
+/// pakai efek utama, rear (indeks terakhir bila ≥5 node) pakai efek rear.
+/// Main `static` + rear independen = keyboard dibiarkan, hanya rear jalan.
+fn run_split(
+    main: KbdEffect,
+    rear: Option<KbdEffect>,
+    base: (u8, u8, u8),
+    brightness: u32,
+    speed: f32,
+    stop: Arc<AtomicBool>,
+) {
+    use axioo_lib::kbd_effect;
+    let devs = kbd::discover();
+    let n = devs.len();
+    let rear_idx = if rear.is_some() && n >= 5 {
+        Some(n - 1)
+    } else {
+        None
+    };
+    let rear_start: Option<((u8, u8, u8), u32)> = rear_idx
+        .and_then(|ri| devs.get(ri))
+        .and_then(kbd::read_state)
+        .map(|s| (s.rgb, s.brightness));
+    let static_main = main == KbdEffect::Static;
+    let sp = speed.clamp(0.1, 4.0);
+    let mut t = 0.0f32;
+    let dt = 0.06;
+    while !stop.load(Ordering::Relaxed) {
+        if static_main {
+            if let (Some(ri), Some(rfx)) = (rear_idx, rear.as_ref()) {
+                if let (Some(d), Some(c)) =
+                    (devs.get(ri), kbd_effect::tick(rfx, base, t, 1).first())
+                {
+                    let _ = kbd::set(d, brightness, *c);
+                }
+            }
+        } else {
+            let mut cols = kbd_effect::tick(&main, base, t, n);
+            if let (Some(ri), Some(rfx)) = (rear_idx, rear.as_ref()) {
+                if let Some(c) = kbd_effect::tick(rfx, base, t, 1).first() {
+                    cols[ri] = *c;
+                }
+            }
+            for (d, rgb) in devs.iter().zip(cols.iter()) {
+                let _ = kbd::set(d, brightness, *rgb);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        t += dt * sp;
+    }
+    if static_main {
+        if let (Some(ri), Some(((r, g, b), br))) = (rear_idx, rear_start) {
+            if let Some(d) = devs.get(ri) {
+                let _ = kbd::set(d, br, (r, g, b));
+            }
+        }
+    } else {
+        for d in &devs {
+            let _ = kbd::set(d, brightness, base);
+        }
+    }
 }
 
 fn ctrlc_handler(stop: Arc<AtomicBool>) {

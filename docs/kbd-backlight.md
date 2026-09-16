@@ -24,6 +24,28 @@ default (`ls /sys/class/leds` hanya 4 zona keyboard). Dites dua jalur:
    Terpasang otomatis oleh `install.sh` (urutan: quirk → 4th-zone →
    getspecs-debug → numpad-ec → lightbar-ec; urutan apply dari
    pristine terverifikasi).
+3. **Animasi rear independen.** Rear ikut semua efek (satu thread
+   menulis 5 node), plus bisa punya efek sendiri: GUI → tab Keyboard →
+   dropdown "Rear exhaust" (Follow/Wave/Rainbow/…), atau
+   `axioo-ctl kbd effect static --rear wave` (keyboard diam, rear
+   jalan; warna keyboard per-zona tidak disentuh, rear di-restore
+   saat stop). Butuh 5 node; bila <5, rear diabaikan (follow).
+
+## Segmen lightbar (DITUTUP 2026-09-20: rear = 1 zona)
+
+Di Windows bar belakang terlihat multi-segmen. Bedah DSDT
+(`Device (DCHU)` → `SCMD` handler `0x67`) menunjukkan peta zona
+firmware: zona 0,1,2 → EC `3,4,5` (keyboard); zona 3 → EC `0x07`
+(lightbar); zona 4 → EC `0x06`; zona 6 → EC `0x09` (+`0x0A`).
+
+Hasil scan hardware per-node (`_4…_8` merah bergantian, 2026-09-20):
+rear tetap **satu warna penuh** (ikut `_4`/EC `0x07` saja) dan salah
+satu indeks kandidat malah menggerakkan **numpad** (alias dengan
+`0x0B`). Kesimpulan: di firmware ini rear = 1 zona RGB, tidak ada
+segmen terpisah. `studiox-lightbar-segments-ec.patch` DIPENSIUNKAN
+(tetap di repo sebagai dokumentasi, tidak dipasang `install.sh`).
+"Multi-segmen" di Windows kemungkinan animasi satu zona dari waktu
+ke waktu (efek Wave/Rainbow kita sudah covers ini).
 
 ## Pemetaan Python → Rust
 
@@ -59,7 +81,9 @@ default (`ls /sys/class/leds` hanya 4 zona keyboard). Dites dua jalur:
    `studiox-kbd-quirk.patch`, DKMS build sebagai
    `tuxedo-drivers-axioo/4.20.1`, reload modul). Quirk hanya aktif untuk
    board `Pongo Studio X` dan hanya untuk tipe yang tidak dikenal —
-   tipe yang sudah dikenal tidak disentuh.
+   tipe yang sudah dikenal tidak disentuh. Setelah reload, `install.sh`
+   langsung menyalakan putih semua zona (termasuk rear) agar keyboard
+   tidak gelap.
 3. **Zona ke-4 (numpad) tidak bisa via WMI `0x67`** (hanya indeks EC
    3/4/5/7/9; indeks 7 = lightbar, tak terlihat di mesin ini).
    Terbukti dari DSDT + driver System76: numpad = indeks EC **`0x0B`**,

@@ -33,6 +33,9 @@ patch "$DST/clevo_leds.h" < "$HERE/studiox-4th-zone.patch"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-getspecs-debug.patch"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-numpad-ec.patch"
 patch "$DST/clevo_leds.h" < "$HERE/studiox-lightbar-ec.patch"
+# TIDAK dipakai: studiox-lightbar-segments-ec.patch (0x06/08/09/0A).
+# Hasil scan 2026-09-20: tak ada yang jadi segmen rear; salah satunya
+# malah menggerakkan numpad (alias dengan 0x0B). Rear = 1 zona (0x07).
 cp "$HERE/dkms.conf" "$DST/dkms.conf"
 echo "patched: $DST/clevo_leds.h"
 
@@ -43,3 +46,27 @@ modprobe tuxedo_keyboard
 modprobe clevo_acpi clevo_wmi
 sleep 1
 ls /sys/class/leds/ | grep -i "kbd\|backlight" && echo DRIVER_OK
+
+# 4. Langsung nyalakan putih semua zona (termasuk rear _4) — habis reload
+#    driver LED lahir dalam keadaan mati; tanpa ini keyboard gelap sampai
+#    ada yang set manual. Tulis sysfs langsung (script ini sudah root):
+#    brightness = max per-node, RGB 255 255 255 (putih, urutan channel bebas).
+echo "menunggu node LED…"
+for i in $(seq 1 20); do
+    N="$(ls /sys/class/leds/ 2>/dev/null | grep -c -i 'kbd\|backlight' || true)"
+    [ "${N:-0}" -ge 1 ] && break
+    sleep 0.5
+done
+WHITE_OK=1
+for led in /sys/class/leds/rgb:kbd_backlight*; do
+    [ -d "$led" ] || continue
+    mx="$(cat "$led/max_brightness" 2>/dev/null || echo 255)"
+    echo "$mx" > "$led/brightness" 2>/dev/null || WHITE_OK=0
+    echo "255 255 255" > "$led/multi_intensity" 2>/dev/null || WHITE_OK=0
+    echo "  white: $(basename "$led")"
+done
+if [ "$WHITE_OK" -eq 1 ]; then
+    echo "KEYBOARD_WHITE_OK (termasuk rear)"
+else
+    echo "KEYBOARD_WHITE_SEBAGIAN — cek: axioo-ctl kbd status"
+fi

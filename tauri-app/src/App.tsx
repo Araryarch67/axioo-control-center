@@ -5,14 +5,13 @@ import {
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
+import { useStore, applyTheme, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
-import { cn, curveDuty, fmt1, hexToRgb, rgbToHex } from "@/lib/utils";
+import { cn, curveDuty, fmt1, hexToRgb } from "@/lib/utils";
 import { Bar, Card, CardTitle, CButton, Chip, Seg, Switch, Toast } from "@/components/ui";
 import { Stat, SpecRow } from "@/components/Gauge";
 import { KeyboardVisual } from "@/components/KeyboardVisual";
 import { FanCurveEditor } from "@/components/FanCurveEditor";
-
-type Tab = "dashboard" | "performance" | "fan" | "keyboard" | "power" | "settings";
 
 const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
   { id: "dashboard", label: "Dash", icon: <LayoutGrid size={19} /> },
@@ -32,7 +31,6 @@ const TITLES: Record<Tab, { title: string; sub: string }> = {
   settings: { title: "Settings", sub: "Theme & service" },
 };
 
-const REFERENCE_CURVE: Array<[number, number]> = [[40, 40], [50, 45], [60, 55], [70, 70], [80, 85], [90, 95], [100, 100]];
 const PRESETS = ["#f5efe0", "#ff5f56", "#86be78", "#7aa2f7", "#f5a524", "#7dd3e0", "#cba6f7", "#ff79c6"];
 
 function Titlebar({ tab }: { tab: Tab }) {
@@ -53,61 +51,55 @@ function Titlebar({ tab }: { tab: Tab }) {
   );
 }
 
-function useSnapshot(notice: (t: string, e?: boolean) => void) {
-  const [snap, setSnap] = React.useState<Snapshot | null>(null);
-  React.useEffect(() => {
-    let alive = true;
-    let fail = 0;
-    const tick = async () => {
-      try {
-        const s = await api.snapshot();
-        if (alive) { setSnap(s); fail = 0; }
-      } catch (e) {
-        if (alive) {
-          fail++;
-          if (fail === 2) notice("Backend tak terjangkau — jalankan via ./dev.sh.", true);
-        }
-      }
-    };
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => { alive = false; clearInterval(t); };
-  }, []);
-  return snap;
-}
-
 export default function App() {
-  const [tab, setTab] = React.useState<Tab>(() => (localStorage.getItem("axioo.tab") as Tab) || "dashboard");
-  const [theme, setTheme] = React.useState<ThemeName>(() => (localStorage.getItem("axioo.theme") as ThemeName) || "ryoku");
-  const [toast, setToast] = React.useState<{ text: string; error?: boolean } | null>(null);
-  const notice = React.useCallback((text: string, error?: boolean) => setToast({ text, error }), []);
-  const snap = useSnapshot(notice);
-
-  const [curve, setCurve] = React.useState<Array<[number, number]>>(REFERENCE_CURVE);
-  const [manualDuty, setManualDuty] = React.useState(70);
-  const [busy, setBusy] = React.useState(false);
-  const [kbdZone, setKbdZone] = React.useState<number | null>(null);
+  const tab = useStore((s) => s.tab);
+  const setTab = useStore((s) => s.setTab);
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
+  const snap = useStore((s) => s.snap);
+  const startPolling = useStore((s) => s.startPolling);
+  const stopPolling = useStore((s) => s.stopPolling);
+  const toast = useStore((s) => s.toast);
+  const dismissToast = useStore((s) => s.dismissToast);
+  const busy = useStore((s) => s.busy);
+  const run = useStore((s) => s.run);
+  const curve = useStore((s) => s.fanCurve);
+  const setCurve = useStore((s) => s.setFanCurve);
+  const manualDuty = useStore((s) => s.fanManualDuty);
+  const setManualDuty = useStore((s) => s.setFanManualDuty);
+  const kbdZone = useStore((s) => s.kbdZone);
+  const setKbdZone = useStore((s) => s.setKbdZone);
+  // State keyboard di store (tidak reset tiap pindah tab; hydrate sekali dari hardware).
+  const kbdBright = useStore((s) => s.kbdBright);
+  const setKbdBright = useStore((s) => s.setKbdBright);
+  const kbdHex = useStore((s) => s.kbdHex);
+  const setKbdHex = useStore((s) => s.setKbdHex);
+  const kbdDraft = useStore((s) => s.kbdDraft);
+  const setKbdDraft = useStore((s) => s.setKbdDraft);
+  const kbdFx = useStore((s) => s.kbdFx);
+  const setKbdFx = useStore((s) => s.setKbdFx);
+  const kbdRearFx = useStore((s) => s.kbdRearFx);
+  const setKbdRearFx = useStore((s) => s.setKbdRearFx);
+  const kbdSpeed = useStore((s) => s.kbdSpeed);
+  const setKbdSpeed = useStore((s) => s.setKbdSpeed);
   const [batStart, setBatStart] = React.useState("80");
   const [batEnd, setBatEnd] = React.useState("100");
 
-  React.useEffect(() => { localStorage.setItem("axioo.tab", tab); }, [tab]);
   React.useEffect(() => {
-    localStorage.setItem("axioo.theme", theme);
-    document.documentElement.dataset.theme = theme;
+    applyTheme(useStore.getState().theme);
+    startPolling();
+    return () => stopPolling();
+  }, [startPolling, stopPolling]);
+
+  React.useEffect(() => {
+    applyTheme(theme);
   }, [theme]);
 
   React.useEffect(() => {
     if (!snap) return;
     if (snap.bat_start != null) setBatStart(String(snap.bat_start));
     if (snap.bat_end != null) setBatEnd(String(snap.bat_end));
-    if (snap.profile.curve.length > 0 && snap.profile.daemon) setCurve(snap.profile.curve);
   }, [snap?.stamp]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const run = async (fn: () => Promise<string>) => {
-    setBusy(true);
-    try { notice(await fn()); } catch (e) { notice(String(e), true); }
-    finally { setBusy(false); }
-  };
 
   const daemon = snap?.profile.daemon ?? false;
   const liveTemp = snap?.max_temp_c ?? snap?.ec_cpu_temp ?? null;
@@ -160,13 +152,17 @@ export default function App() {
             {tab === "dashboard" && <Dashboard snap={snap} shownDuty={shownDuty} ecAuto={ecAuto} liveTemp={liveTemp} busy={busy} run={run} />}
             {tab === "performance" && <Performance snap={snap} busy={busy} run={run} />}
             {tab === "fan" && <FanPanel snap={snap} curve={curve} setCurve={setCurve} liveTemp={liveTemp} manualDuty={manualDuty} setManualDuty={setManualDuty} busy={busy} run={run} ecAuto={ecAuto} />}
-            {tab === "keyboard" && <KeyboardPanel snap={snap} zone={kbdZone} setZone={setKbdZone} />}
+            {tab === "keyboard" && <KeyboardPanel snap={snap} zone={kbdZone} setZone={setKbdZone}
+              bright={kbdBright} setBright={setKbdBright} hex={kbdHex} setHex={setKbdHex}
+              draft={kbdDraft} setDraft={setKbdDraft} fx={kbdFx} setFx={setKbdFx}
+              rearFx={kbdRearFx} setRearFx={setKbdRearFx}
+              speed={kbdSpeed} setSpeed={setKbdSpeed} />}
             {tab === "power" && <PowerPanel snap={snap} batStart={batStart} setBatStart={setBatStart} batEnd={batEnd} setBatEnd={setBatEnd} busy={busy} run={run} />}
             {tab === "settings" && <SettingsPanel snap={snap} theme={theme} setTheme={setTheme} />}
           </div>
         </main>
       </div>
-      {toast && <Toast text={toast.text} error={toast.error} onClose={() => setToast(null)} />}
+      {toast && <Toast text={toast.text} error={toast.error} onClose={dismissToast} />}
     </div>
   );
 }
@@ -409,58 +405,47 @@ function FanPanel({ snap, curve, setCurve, liveTemp, manualDuty, setManualDuty, 
 
 /* ---------------- keyboard (live-apply, tanpa tombol) ---------------- */
 
-function KeyboardPanel({ snap, zone, setZone }: {
+function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, draft, setDraft, fx, setFx, rearFx, setRearFx, speed, setSpeed }: {
   snap: Snapshot | null; zone: number | null; setZone: (z: number | null) => void;
+  bright: number; setBright: (n: number) => void; hex: string; setHex: (h: string) => void;
+  draft: string; setDraft: (d: string) => void; fx: string; setFx: (f: string) => void;
+  rearFx: string; setRearFx: (f: string) => void;
+  speed: number; setSpeed: (s: number) => void;
 }) {
   const max = snap?.kbd_max || 255;
   const nZoneTotal = snap?.kbd_zones.length ?? 0;
   /** Indeks 4 dari 5+ zona = lightbar exhaust belakang (EC 0x07). */
   const zoneName = (i: number | null) =>
     i == null ? "semua" : nZoneTotal >= 5 && i === 4 ? "Rear" : `Z${i + 1}`;
-  const [bright, setBright] = React.useState(255);
-  const [hex, setHex] = React.useState("#f5efe0");
-  const [draft, setDraft] = React.useState("#f5efe0");
   const [status, setStatus] = React.useState("…");
-  const [fx, setFx] = React.useState("static");
-  const [speed, setSpeed] = React.useState(1);
   const [animT, setAnimT] = React.useState(0);
-  const initRef = React.useRef(false);
   const lastFxChange = React.useRef(0);
   const timer = React.useRef<number | undefined>(undefined);
   const canWrite = (snap?.kbd_writable ?? false) && (snap?.kbd_nodes ?? 0) > 0;
   const validHex = /^#[0-9a-fA-F]{6}$/.test(hex);
   const nZones = Math.max(snap?.kbd_zones.length ?? 0, 4);
-
-  // Sinkron sekali dari hardware; setelah user menyentuh, jangan timpa lagi.
-  React.useEffect(() => {
-    if (!snap || initRef.current) return;
-    if (snap.kbd_brightness != null) setBright(snap.kbd_brightness);
-    if (snap.kbd_rgb) {
-      const h = rgbToHex(...snap.kbd_rgb);
-      setHex(h);
-      setDraft(h);
-    }
-    if (snap.kbd_effect) setFx(snap.kbd_effect);
-    if (snap.kbd_effect_speed) setSpeed(snap.kbd_effect_speed);
-    initRef.current = true;
-  }, [snap]);
+  // Rear independen hanya bila backend melihat ≥5 node (indeks terakhir).
+  const rearIdx = (snap?.kbd_zones.length ?? 0) >= 5 ? 4 : -1;
+  const rearActive = rearFx !== "follow" && rearIdx >= 0;
 
   // Rekonsiliasi efek dari backend (bila user >1.5 dtk tak mengubah).
+  // State warna/brightness milik App (tidak reset); init sekali di App.
   React.useEffect(() => {
-    if (!snap || !initRef.current) return;
+    if (!snap) return;
     if (Date.now() - lastFxChange.current > 1500 && snap.kbd_effect !== fx) setFx(snap.kbd_effect);
-  }, [snap, fx]);
+    if (Date.now() - lastFxChange.current > 1500 && snap.kbd_rear_effect !== rearFx) setRearFx(snap.kbd_rear_effect);
+  }, [snap, fx, rearFx]);
 
   const sameRgb = (a: [number, number, number], b: [number, number, number]) =>
     Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) <= 6;
 
-  const applyNow = React.useCallback(async (f: string, b: number, h: string, z: number | null, sp: number) => {
+  const applyNow = React.useCallback(async (f: string, b: number, h: string, z: number | null, sp: number, rear: string) => {
     const [r, g, bl] = hexToRgb(h);
     try {
-      if (f === "static") {
+      if (f === "static" && rear === "follow") {
         await api.kbdSet(z, b, r, g, bl);
       } else {
-        await api.kbdEffectStart(f, r, g, bl, b, sp);
+        await api.kbdEffectStart(f, r, g, bl, b, sp, rear);
       }
       setStatus(`live · ${new Date().toLocaleTimeString("en-GB")}`);
     } catch (e) {
@@ -469,9 +454,10 @@ function KeyboardPanel({ snap, zone, setZone }: {
   }, []);
 
   // Jam animasi GUI: reset tiap ganti efek/speed (backend thread juga
-  // mulai dari t=0 saat spawn, jadi fase awal selaras).
+  // mulai dari t=0 saat spawn, jadi fase awal selaras). Jalan juga bila
+  // hanya rear yang beranimasi (keyboard static + rear wave).
   React.useEffect(() => {
-    if (fx === "static") return;
+    if (fx === "static" && !rearActive) return;
     let raf = 0;
     let last = 0;
     const t0 = performance.now();
@@ -484,64 +470,94 @@ function KeyboardPanel({ snap, zone, setZone }: {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [fx, speed]);
+  }, [fx, speed, rearActive, rearFx]);
 
   // Zona tampil: snapshot saat static, hasil tick() saat efek jalan.
+  // Rear independen selalu di-preview dari tick()-nya sendiri.
   const [rr, gg, bb] = hexToRgb(validHex ? hex : "#000000");
   const shownZones: Array<[number, [number, number, number]]> = React.useMemo(() => {
-    if (fx === "static") return snap?.kbd_zones ?? [];
+    if (fx === "static" && !rearActive) return snap?.kbd_zones ?? [];
     const b = Math.min(bright, max);
-    return tickEffect(fx, [rr, gg, bb], animT * speed, nZones).map(
+    const cols = (fx === "static" && snap?.kbd_zones.length
+      ? snap.kbd_zones.map((z) => z[1])
+      : tickEffect(fx, [rr, gg, bb], animT * speed, nZones)).map(
       (c) => [b, c] as [number, [number, number, number]],
     );
-  }, [fx, snap, rr, gg, bb, bright, max, animT, speed, nZones]);
+    if (rearActive) {
+      const rc = tickEffect(rearFx, [rr, gg, bb], animT * speed, 1)[0];
+      if (rearIdx >= 0 && rearIdx < cols.length) cols[rearIdx] = [b, rc];
+    }
+    return cols;
+  }, [fx, rearActive, rearFx, rearIdx, snap, rr, gg, bb, bright, max, animT, speed, nZones]);
 
   // Apakah hardware sudah sinkron? Hanya bermakna untuk static
-  // (efek animasi selalu berubah, tak pernah "sinkron").
+  // (efek animasi selalu berubah, tak pernah "sinkron"). Zona rear
+  // dikeluarkan bila ia beranimasi independen.
   const inSync = React.useMemo(() => {
     if (fx !== "static") return false;
     const zones = snap?.kbd_zones ?? [];
     if (!zones.length || !validHex) return false;
     const [r, g, b] = hexToRgb(hex);
-    const targets = zone == null ? zones.map((_, i) => i) : [zone];
-    return targets.every((i) => {
+    const all = zone == null
+      ? zones.map((_: [number, [number, number, number]], i: number) => i)
+      : [zone];
+    const targets = rearActive ? all.filter((i: number) => i !== rearIdx) : all;
+    if (!targets.length) return false;
+    return targets.every((i: number) => {
       const z = zones[i];
       return z && z[0] === Math.min(bright, max) && sameRgb(z[1], [r, g, b]);
     });
-  }, [snap, validHex, hex, zone, bright, max, fx]);
+  }, [snap, validHex, hex, zone, bright, max, fx, rearActive, rearIdx]);
+
+  // Tulis hanya setelah interaksi user (bukan saat mount/init),
+  // agar kembali dari tab lain tidak menimpa hardware.
+  const dirtyRef = React.useRef(false);
+  const markDirty = () => { dirtyRef.current = true; };
 
   const pickEffect = (f: string) => {
     setFx(f);
     lastFxChange.current = Date.now();
-    if (!initRef.current || !canWrite || !validHex) return;
+    markDirty();
+    if (!canWrite || !validHex) return;
     window.clearTimeout(timer.current);
-    applyNow(f, bright, hex, zone, speed);
+    applyNow(f, bright, hex, zone, speed, rearFx);
+  };
+
+  const pickRear = (r: string) => {
+    setRearFx(r);
+    lastFxChange.current = Date.now();
+    if (!canWrite || !validHex) return;
+    window.clearTimeout(timer.current);
+    // Langsung apply (tanpa markDirty agar debounce tak double-spawn).
+    applyNow(fx, bright, hex, zone, speed, r);
   };
 
   // Live-apply debounce; lewati bila invalid atau sudah sinkron.
   React.useEffect(() => {
-    if (!initRef.current || !canWrite || !validHex || inSync) {
+    if (!dirtyRef.current || !canWrite || !validHex || inSync) {
       if (inSync) setStatus("sinkron");
       return;
     }
     setStatus("menulis…");
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => applyNow(fx, bright, hex, zone, speed), 280);
+    timer.current = window.setTimeout(() => applyNow(fx, bright, hex, zone, speed, rearFx), 280);
     return () => window.clearTimeout(timer.current);
-  }, [bright, hex, zone, canWrite, validHex, inSync, fx, speed, applyNow]);
+  }, [bright, hex, zone, canWrite, validHex, inSync, fx, rearFx, speed, applyNow]);
 
   const pickPreset = (p: string) => {
     setHex(p);
     setDraft(p);
-    if (initRef.current && canWrite) {
+    markDirty();
+    if (canWrite) {
       window.clearTimeout(timer.current);
-      applyNow(fx, bright, p, zone, speed);
+      applyNow(fx, bright, p, zone, speed, rearFx);
     }
   };
 
   const commitDraft = () => {
     if (/^#[0-9a-fA-F]{6}$/.test(draft.trim())) {
       const h = draft.trim().toLowerCase();
+      markDirty();
       setHex(h);
       setDraft(h);
     } else {
@@ -560,7 +576,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
           Live map — klik untuk pilih zona{fx !== "static" ? " · beranimasi" : ""}
         </CardTitle>
         <KeyboardVisual zones={shownZones} maxBright={snap?.kbd_max || 255}
-          selected={zone} onSelect={setZone} />
+          selected={zone} onSelect={(z) => { markDirty(); setZone(z); }} />
         <div className="num mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-faint">
           {shownZones.map((z, i) => (
             <span key={i}>
@@ -599,6 +615,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
                 ref={(el) => el?.style.setProperty("--fill", `${((speed - 0.25) / 2.75) * 100}%`)}
                 onChange={(e) => {
                   const v = Number(e.target.value);
+                  markDirty();
                   setSpeed(v);
                   e.target.style.setProperty("--fill", `${((v - 0.25) / 2.75) * 100}%`);
                 }} className="ck flex-1" />
@@ -607,12 +624,25 @@ function KeyboardPanel({ snap, zone, setZone }: {
             <p className="num mt-2 text-[11px] text-faint">efek memakai warna + brightness di bawah untuk semua zona · pilih Static untuk kembali ke warna diam per-zona</p>
           </>
         )}
+        {rearIdx >= 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-hair pt-4">
+            <span className="text-[12px] font-extrabold uppercase text-dim">Rear exhaust</span>
+            <select value={rearFx} onChange={(e) => pickRear(e.target.value)}
+              className="field !w-auto cursor-pointer" title="Animasi independen lightbar belakang (EC 0x07)">
+              <option value="follow">Follow keyboard</option>
+              {EFFECTS.filter((e) => e.id !== "static").map((e) => (
+                <option key={e.id} value={e.id}>{e.label} — {e.desc}</option>
+              ))}
+            </select>
+            {rearActive && <Chip on color="ok">rear {rearFx} · keyboard tetap</Chip>}
+          </div>
+        )}
       </Card>
       <Card className="col-span-12 xl:col-span-5">
         <CardTitle icon={<Keyboard size={14} />} right={<Chip on={(snap?.kbd_nodes ?? 0) > 0}>{snap?.kbd_nodes ?? 0} LEDs</Chip>}>Zones</CardTitle>
         <div className="flex flex-wrap gap-2">
           {[{ label: "All", z: null }, ...Array.from({ length: snap?.kbd_nodes ?? 0 }, (_, i) => ({ label: zoneName(i), z: i as number | null }))].map((o) => (
-            <button key={o.label} onClick={() => setZone(o.z)}
+            <button key={o.label} onClick={() => { markDirty(); setZone(o.z); }}
               className={cn("rounded px-3.5 py-2 text-[13px] font-extrabold uppercase transition-all",
                 zone === o.z
                   ? "border-2 border-black bg-accent"
@@ -634,6 +664,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
           <input type="range" min={0} max={max} value={Math.min(bright, max)}
             ref={(el) => el?.style.setProperty("--fill", `${(Math.min(bright, max) / max) * 100}%`)}
             onChange={(e) => {
+              markDirty();
               setBright(Number(e.target.value));
               e.target.style.setProperty("--fill", `${(Number(e.target.value) / max) * 100}%`);
             }} className="ck" />
@@ -657,7 +688,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
           ))}
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <input type="color" value={validHex ? hex : "#000000"} onChange={(e) => { setHex(e.target.value); setDraft(e.target.value); }}
+          <input type="color" value={validHex ? hex : "#000000"} onChange={(e) => { markDirty(); setHex(e.target.value); setDraft(e.target.value); }}
             className="h-10 w-16 cursor-pointer rounded border-2 border-black bg-transparent p-1" />
           <input value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -668,7 +699,7 @@ function KeyboardPanel({ snap, zone, setZone }: {
         </div>
         <p className="mt-3 font-mono text-[11px] text-faint">perubahan langsung ditulis ke LED — tanpa tombol apply.</p>
         {snap && !snap.kbd_writable && snap.kbd_nodes > 0 && (
-          <p className="mt-1 font-mono text-[11px] text-accent">sysfs read-only — sudo udevadm trigger --subsystem-match=leds --action=add</p>
+          <p className="mt-1 font-mono text-[11px] text-accent">sysfs read-only — jalankan ./setup.sh (udev rule + grup video), lalu re-login + restart app.</p>
         )}
       </Card>
     </div>
@@ -759,8 +790,44 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
 function SettingsPanel({ snap, theme, setTheme }: {
   snap: Snapshot | null; theme: ThemeName; setTheme: (t: ThemeName) => void;
 }) {
+  const [autoStart, setAutoStart] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const m = await import("@tauri-apps/plugin-autostart");
+        if (alive) setAutoStart(await m.isEnabled());
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<boolean>("autostart-changed", (e) => {
+          if (alive) setAutoStart(e.payload);
+        });
+      } catch { if (alive) setAutoStart(null); }
+    })();
+    return () => { alive = false; unlisten?.(); };
+  }, []);
+  const flipAutoStart = async () => {
+    if (autoStart == null) return;
+    try {
+      const m = await import("@tauri-apps/plugin-autostart");
+      if (autoStart) await m.disable(); else await m.enable();
+      setAutoStart(!autoStart);
+    } catch { /* toast di level App bila perlu */ }
+  };
   return (
     <div className="grid grid-cols-12 gap-4">
+      <Card className="col-span-12 xl:col-span-6">
+        <CardTitle>Startup</CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[14px] font-bold">Start saat login (tray)</div>
+            <div className="text-[12.5px] text-faint">App sembunyi ke tray · butuh tray host (mis. waybar) di Hyprland</div>
+          </div>
+          <Switch on={autoStart ?? false} disabled={!isTauri() || autoStart == null} onClick={flipAutoStart} />
+        </div>
+        <p className="mt-2 text-[12px] text-faint">Tutup jendela (×/Alt+F4) = sembunyi ke tray · keluar via menu tray → Keluar.</p>
+      </Card>
       <Card className="col-span-12 xl:col-span-6">
         <CardTitle>Theme</CardTitle>
         <div className="grid grid-cols-2 gap-2">

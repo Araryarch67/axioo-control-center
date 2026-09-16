@@ -20,6 +20,12 @@ use std::time::Instant;
 
 use axioo_lib::{battery, cpu, dmi, ec, fan, fan_ctrl, hwmon, kbd, kbd_effect, memory, nvidia, rapl};
 use serde::Serialize;
+use tauri::{
+    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager, WindowEvent,
+};
+use tauri_plugin_autostart::ManagerExt;
 
 // ---------- D-Bus proxies (async, same bus as axiood) ----------
 
@@ -120,6 +126,8 @@ struct Snapshot {
     bat_writable: bool,
     /// Efek RGB aktif ("static" = warna diam).
     kbd_effect: String,
+    /// Efek rear exhaust independen ("follow" = ikut efek utama).
+    kbd_rear_effect: String,
     /// Pengali kecepatan efek (1.0 = normal).
     kbd_effect_speed: f32,
     profile: ProfileState,
@@ -138,6 +146,8 @@ struct SamplerState {
 struct EffectState {
     /// Nama efek aktif ("static" = tidak ada animasi).
     current: String,
+    /// Efek rear exhaust independen ("follow" = ikut efek utama).
+    rear: String,
     /// Pengali kecepatan terakhir (1.0 = normal).
     speed: f32,
     /// Flag stop untuk thread yang jalan (None = tidak ada).
@@ -151,6 +161,7 @@ impl EffectState {
             s.store(true, Ordering::Relaxed);
         }
         self.current = "static".to_string();
+        self.rear = "follow".to_string();
     }
 }
 
@@ -247,6 +258,7 @@ fn build_snapshot(
     st: &mut SamplerState,
     profile: ProfileState,
     kbd_effect: String,
+    kbd_rear_effect: String,
     kbd_effect_speed: f32,
 ) -> Snapshot {
     let now = Instant::now();
@@ -419,6 +431,7 @@ fn build_snapshot(
         kbd_writable,
         bat_writable,
         kbd_effect,
+        kbd_rear_effect,
         kbd_effect_speed,
         profile,
         stamp: st.n,
@@ -434,11 +447,11 @@ async fn get_snapshot(
 ) -> Result<Snapshot, String> {
     let profile = query_profile().await;
     let mut st = sampler.lock().map_err(|e| format!("sampler lock: {e}"))?;
-    let (fx, fx_speed) = effects
+    let (fx, fx_rear, fx_speed) = effects
         .lock()
-        .map(|e| (e.current.clone(), e.speed))
-        .unwrap_or_else(|_| ("static".to_string(), 1.0));
-    Ok(build_snapshot(&mut st, profile, fx, fx_speed))
+        .map(|e| (e.current.clone(), e.rear.clone(), e.speed))
+        .unwrap_or_else(|_| ("static".to_string(), "follow".to_string(), 1.0));
+    Ok(build_snapshot(&mut st, profile, fx, fx_rear, fx_speed))
 }
 
 #[tauri::command]
@@ -610,6 +623,85 @@ struct KbdEffectArgs {
     brightness: u32,
     /// Pengali kecepatan (None = 1.0); di-clamp 0.1..=4.0.
     speed: Option<f32>,
+    /// Efek rear exhaust independen: None/"follow"/"" = ikut efek utama,
+    /// selainnya nama efek (`wave`, `rainbow`, …). Diabaikan bila <5 node.
+    rear: Option<String>,
+}
+
+/// Loop animasi gabungan: zona keyboard pakai `main`, zona rear (indeks
+/// terakhir bila ≥5 node) pakai `rear`. Satu thread agar tak berebut LED.
+/// `tick`/`set` hanya dipanggil (murni + sysfs aman) — `axioo-lib` tak diubah.
+fn spawn_split(
+    main: kbd_effect::KbdEffect,
+    rear: Option<kbd_effect::KbdEffect>,
+    base: (u8, u8, u8),
+    brightness: u32,
+    speed: f32,
+) -> Arc<AtomicBool> {
+    use std::sync::atomic::Ordering;
+    use std::thread;
+    use std::time::Duration;
+    let stop = Arc::new(AtomicBool::new(false));
+    let s = stop.clone();
+    thread::spawn(move || {
+        let devs = kbd::discover();
+        if devs.is_empty() {
+            return;
+        }
+        let n = devs.len();
+        // Rear = indeks terakhir hanya bila backend melihat ≥5 node
+        // (3 keyboard + numpad + lightbar EC 0x07).
+        let rear_idx = if rear.is_some() && n >= 5 { Some(n - 1) } else { None };
+        let sp = speed.clamp(0.1, 4.0);
+        // Main static + rear independen: keyboard DIBIARKAN (warna per-zona
+        // user tidak diobrak-abrik), hanya rear yang dianimasikan.
+        // Ingat warna rear semula untuk restore saat stop.
+        let rear_start: Option<((u8, u8, u8), u32)> = rear_idx
+            .and_then(|ri| devs.get(ri))
+            .and_then(kbd::read_state)
+            .map(|s| (s.rgb, s.brightness));
+        let static_main = main == kbd_effect::KbdEffect::Static;
+        let mut t = 0.0f32;
+        let dt = 0.06;
+        while !s.load(Ordering::Relaxed) {
+            if static_main {
+                if let (Some(ri), Some(rfx)) = (rear_idx, rear.as_ref()) {
+                    if let (Some(d), Some(c)) =
+                        (devs.get(ri), kbd_effect::tick(rfx, base, t, 1).first())
+                    {
+                        let _ = kbd::set(d, brightness, *c);
+                    }
+                }
+            } else {
+                let mut cols = kbd_effect::tick(&main, base, t, n);
+                if let (Some(ri), Some(rfx)) = (rear_idx, rear.as_ref()) {
+                    if let Some(c) = kbd_effect::tick(rfx, base, t, 1).first() {
+                        cols[ri] = *c;
+                    }
+                }
+                for (d, rgb) in devs.iter().zip(cols.iter()) {
+                    let _ = kbd::set(d, brightness, *rgb);
+                }
+            }
+            thread::sleep(Duration::from_millis(60));
+            t += dt * sp;
+        }
+        if static_main {
+            // Kembalikan rear ke warna semula; keyboard tak pernah disentuh.
+            if let (Some(ri), Some(((r, g, b), br))) =
+                (rear_idx, rear_start)
+            {
+                if let Some(d) = devs.get(ri) {
+                    let _ = kbd::set(d, br, (r, g, b));
+                }
+            }
+        } else {
+            for d in &devs {
+                let _ = kbd::set(d, brightness, base);
+            }
+        }
+    });
+    stop
 }
 
 /// Animasi RGB keyboard (thread userspace via `kbd_effect`, tulis sysfs
@@ -623,6 +715,15 @@ async fn kbd_effect_start(
 ) -> Result<String, String> {
     let effect = kbd_effect::KbdEffect::parse(&args.effect.chars().take(16).collect::<String>())
         .ok_or_else(|| format!("efek tak dikenal: '{}'", args.effect))?;
+    let rear_raw = args.rear.unwrap_or_default().chars().take(16).collect::<String>();
+    let rear_fx = if rear_raw.is_empty() || rear_raw.eq_ignore_ascii_case("follow") {
+        None
+    } else {
+        Some(
+            kbd_effect::KbdEffect::parse(&rear_raw)
+                .ok_or_else(|| format!("efek rear tak dikenal: '{rear_raw}'"))?,
+        )
+    };
     if kbd::discover().is_empty() {
         return Err("Keyboard backlight tidak ditemukan.".to_string());
     }
@@ -630,7 +731,7 @@ async fn kbd_effect_start(
         .lock()
         .map_err(|e| format!("effect lock: {e}"))?;
     fx.stop_all();
-    if effect == kbd_effect::KbdEffect::Static {
+    if effect == kbd_effect::KbdEffect::Static && rear_fx.is_none() {
         return Ok("Efek mati — warna diam.".to_string());
     }
     let max = kbd::discover()
@@ -638,16 +739,22 @@ async fn kbd_effect_start(
         .map(|kb| kb.max_brightness)
         .unwrap_or(255);
     let speed = args.speed.unwrap_or(1.0).clamp(0.1, 4.0);
-    let stop = kbd_effect::spawn(
+    let rear_name = rear_fx.as_ref().map(|e| e.as_str().to_string());
+    let stop = spawn_split(
         effect.clone(),
+        rear_fx,
         (args.r, args.g, args.b),
         args.brightness.min(max),
         speed,
     );
     fx.stops.push(stop);
     fx.current = effect.as_str().to_string();
+    fx.rear = rear_name.clone().unwrap_or_else(|| "follow".to_string());
     fx.speed = speed;
-    Ok(format!("Efek {} jalan ({}x).", effect.label(), speed))
+    Ok(match rear_name {
+        Some(r) => format!("Efek {} jalan ({}x) + rear {}.", effect.label(), speed, r),
+        None => format!("Efek {} jalan ({}x).", effect.label(), speed),
+    })
 }
 
 /// Hentikan animasi RGB (kembalikan warna diam terakhir).
@@ -693,6 +800,11 @@ async fn battery_set(start: Option<u64>, end: Option<u64>) -> Result<String, Str
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            // Argumen saat dijalankan otomatis ketika login → mulai sembunyi di tray.
+            Some(vec!["--minimized"]),
+        ))
         .manage(Mutex::new(SamplerState {
             prev_stat: cpu::read_times(),
             prev_rapl: rapl::domains(),
@@ -701,9 +813,95 @@ fn main() {
         }))
         .manage(Mutex::new(EffectState {
             current: "static".to_string(),
+            rear: "follow".to_string(),
             speed: 1.0,
             stops: Vec::new(),
         }))
+        .setup(|app| {
+            // Ikon tray = ikon jendela bawaan bundle (logo), fallback 32x32.
+            let icon = app
+                .default_window_icon()
+                .cloned()
+                .unwrap_or_else(|| {
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))
+                        .expect("tray fallback icon")
+                });
+            let show = MenuItemBuilder::with_id("show", "Tampilkan").build(app)?;
+            let autostart = CheckMenuItemBuilder::with_id("autostart", "Start saat login")
+                .checked(
+                    app.autolaunch()
+                        .is_enabled()
+                        .unwrap_or(false),
+                )
+                .build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Keluar").build(app)?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&show, &autostart, &quit])
+                .build()?;
+            // Clone untuk update centang dari dalam handler menu.
+            let autostart_item = autostart.clone();
+            TrayIconBuilder::new()
+                .icon(icon)
+                .tooltip("Axioo Control Center")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(move |app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "autostart" => {
+                        let m = app.autolaunch();
+                        let now_on = m.is_enabled().unwrap_or(false);
+                        let ok = if now_on { m.disable() } else { m.enable() }.is_ok();
+                        if ok {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.emit("autostart-changed", !now_on);
+                            }
+                        }
+                        let _ = autostart_item.set_checked(!now_on && ok);
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // Klik kiri = tampil/sembunyi; kanan = menu (otomatis).
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(w) = app.get_webview_window("main") {
+                            if w.is_visible().unwrap_or(true) {
+                                let _ = w.hide();
+                            } else {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+            // Autostart login (--minimized) → langsung sembunyi ke tray.
+            if std::env::args().any(|a| a == "--minimized") {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
+            Ok(())
+        })
+        // Tombol close (termasuk Alt+F4) = sembunyi ke tray, bukan keluar.
+        // Keluar beneran hanya via menu tray → Keluar.
+        .on_window_event(|win, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = win.hide();
+                api.prevent_close();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             set_profile,

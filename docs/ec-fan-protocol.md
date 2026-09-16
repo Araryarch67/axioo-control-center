@@ -89,7 +89,7 @@ kita pakai model yang lebih bersih dan sama amannya:
 ```
 axiood (systemd service, root)  ← satu-satunya penulis EC
    ↕ D-Bus (com.axioo.Control)
-axioo-ctl (user) / axioo-control-center GUI (user, GPUI)
+axioo-ctl (user) / axioo-control-center GUI (user, Tauri)
 ```
 
 ## F. Langkah validasi di Pongo Studio X (read-only, aman)
