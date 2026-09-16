@@ -65,8 +65,23 @@ Lalu buka app-nya (atau `cd tauri-app && ./dev.sh`).
 > **Tested only on the Pongo Studio X 2025 (X560WNR-SU9).**
 > Pongo lain: install jalan, tapi tulis kipas dikunci sampai map EC
 > tervalidasi — mulai read-only (`probe`, `fan dump`, `kbd status`).
-> Punya model lain? Buka issue dengan output `probe` + DMI
-> (lihat rencana profil per-board di bawah).
+> Punya model lain? Buka issue dengan output `probe` + DMI.
+
+## Hardware yang didukung
+
+Studio X 2025 = barebone **Clevo X560WNR** — profilnya berlaku juga
+buat rebrand satu barebone (tentap wajib `validate` per mesin,
+firmware tiap merek bisa beda dikit):
+
+| Merek | Model |
+|---|---|
+| Axioo | Pongo Studio X 2025 (X560WNR-SU9) ✅ tested |
+| Sager / Xotic PC | NP9561R (X560WNR1-G) — sama, belum ada tester |
+| AVADirect | X560WNR-G — sama, belum ada tester |
+
+> Habis update kernel dan keyboard mati? Rebuild DKMS:
+> `sudo dkms autoinstall` lalu `sudo modprobe -r tuxedo_keyboard &&
+> sudo modprobe tuxedo_keyboard` (driver tuxedo rapuh lawan kernel baru).
 
 ## Detail
 
