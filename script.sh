@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 # Build release + paketkan AppImage Axioo Control Center (Tauri).
 #
-#   ./script.sh                 # frontend + binari release + AppImage -> dist/
+#   ./script.sh                 # progress bar diam (default)
+#   ./script.sh --verbose     # tampilkan output mentah
 #   ./script.sh --no-appimage   # cuma build (tanpa bundle)
 #
 # Butuh: node/npm, Rust, webkit2gtk (lihat tauri-app/dev.sh).
 # sudo TIDAK perlu untuk build.
 set -euo pipefail
+
+QUIET=1
+NO_APPIMAGE=0
+for a in "$@"; do
+    case "$a" in
+        -v|--verbose) QUIET=0 ;;
+        -q|--quiet|--silent) QUIET=1 ;; # kompat: kini default
+        --no-appimage) NO_APPIMAGE=1 ;;
+        -h|--help) echo "pakai: ./script.sh [--verbose] [--no-appimage]"; exit 0 ;;
+    esac
+done
+log() { [ "$QUIET" = 1 ] || echo "$@"; }
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$HERE/dist"
@@ -22,13 +35,21 @@ if command -v pkg-config >/dev/null 2>&1; then
     done
 fi
 
-echo "==> frontend (vite build)"
+log "==> frontend (vite build)"
 if [ ! -d "$HERE/tauri-app/node_modules" ]; then
-    (cd "$HERE/tauri-app" && npm install --no-audit --no-fund)
+    if [ "$QUIET" = 1 ]; then
+        (cd "$HERE/tauri-app" && npm install --no-audit --no-fund >/dev/null 2>&1)
+    else
+        (cd "$HERE/tauri-app" && npm install --no-audit --no-fund)
+    fi
 fi
-(cd "$HERE/tauri-app" && npm run build)
+if [ "$QUIET" = 1 ]; then
+    (cd "$HERE/tauri-app" && npm run build >/dev/null 2>&1)
+else
+    (cd "$HERE/tauri-app" && npm run build)
+fi
 
-echo "==> ikon hicolor (dist/icon.png dari icons/)"
+log "==> ikon hicolor (dist/icon.png dari icons/)"
 # dist/icon.png dipakai setup.sh untuk hicolor launcher — generate di sini
 # agar selalu ada habis build bersih (uninstall menghapusnya).
 if [ -f "$HERE/icons/android-chrome-512x512.png" ]; then
@@ -43,15 +64,19 @@ EOF
     fi
 fi
 
-echo "==> cargo build --release (ctl + daemon + tauri)"
-cargo build --release -p axioo-ctl -p axiood -p axioo-center
-echo "binaries: $HERE/target/release/axioo-ctl $HERE/target/release/axiood $HERE/target/release/axioo-center"
+log "==> cargo build --release (ctl + daemon + tauri)"
+if [ "$QUIET" = 1 ]; then
+    cargo build --release -p axioo-ctl -p axiood -p axioo-center >/dev/null 2>&1
+else
+    cargo build --release -p axioo-ctl -p axiood -p axioo-center
+fi
+log "binaries: $HERE/target/release/axioo-ctl $HERE/target/release/axiood $HERE/target/release/axioo-center"
 
-if [ "${1:-}" = "--no-appimage" ]; then
+if [ "$NO_APPIMAGE" = 1 ]; then
     exit 0
 fi
 
-echo "==> AppImage (tauri bundle)"
+log "==> AppImage (tauri bundle)"
 mkdir -p "$OUT"
 # NO_STRIP=1 (wajib di Arch modern): strip kuno bawaan linuxdeploy gagal
 # pada library dengan section `.relr.dyn` (RELR relocs, default toolchain
@@ -59,8 +84,20 @@ mkdir -p "$OUT"
 # SEMUA lib → bundle gagal. Tanpa strip AppImage sedikit lebih besar,
 # fungsi identik. (Diverifikasi 2026-09-16.)
 export NO_STRIP=1
-(cd "$HERE/tauri-app" && npx tauri build --bundles appimage)
+if [ "$QUIET" = 1 ]; then
+    (cd "$HERE/tauri-app" && npx tauri build --bundles appimage >/dev/null 2>&1)
+else
+    (cd "$HERE/tauri-app" && npx tauri build --bundles appimage)
+fi
 # Bundle dir = cargo target dir workspace (bukan src-tauri/target!):
 # `cargo metadata` → target_directory = $HERE/target (workspace root).
-ls -la "$HERE/target/release/bundle/appimage/"*.AppImage 2>/dev/null || true
-echo "OK (appimage di atas; VERSION=$VERSION)"
+if [ "$QUIET" = 1 ]; then
+    ls "$HERE/target/release/bundle/appimage/"*.AppImage >/dev/null 2>&1 || true
+else
+    ls -la "$HERE/target/release/bundle/appimage/"*.AppImage 2>/dev/null || true
+fi
+if [ "$QUIET" = 1 ]; then
+    echo "OK (appimage; VERSION=$VERSION)"
+else
+    echo "OK (appimage di atas; VERSION=$VERSION)"
+fi

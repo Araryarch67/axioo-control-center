@@ -9,7 +9,8 @@ pub struct DaemonState {
     pub quiet_fan: bool,
     /// Bila `true`, loop TIDAK menulis duty — kipas dikembalikan ke
     /// firmware EC auto (`fan_ctrl::set_auto()` satu-kali saat masuk mode).
-    /// RAPL/PPD tetap mengikuti profil. Default `false` (kurva daemon).
+    /// RAPL/PPD tetap mengikuti profil. Default `true` (EC auto; daemon
+    /// hanya atur RAPL/PPD sampai user pilih Curve/Manual di GUI).
     /// Mengalahkan [`DaemonState::fan_manual`].
     pub fan_ec_auto: bool,
     /// Override manual: `Some(duty)` = kunci duty ini via loop daemon
@@ -27,7 +28,7 @@ impl DaemonState {
         Self {
             profile,
             quiet_fan,
-            fan_ec_auto: false,
+            fan_ec_auto: true,
             fan_manual: None,
             ppd_profile,
             last_duty: 40,

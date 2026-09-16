@@ -6,13 +6,61 @@
 #   4. install AppImage ke ~/.local/share/axioo-control-center + entri desktop
 #
 # Jalankan TANPA sudo (sudo diminta di langkah yang perlu):
-#   ./setup.sh        (atau ./install.sh — alias yang sama)
+#   ./setup.sh              (progress bar default; detail di /tmp/axioo-setup.log)
+#   ./setup.sh --verbose    (tampilkan semua output mentah)
 #
 # Pasangannya: ./uninstall.sh  (bersih total: daemon + AppImage + cache)
 set -euo pipefail
 
+QUIET=1
+for a in "$@"; do
+    case "$a" in
+        -v|--verbose) QUIET=0 ;;
+        -q|--quiet|--silent) QUIET=1 ;; # kompat: dulu opt-in, kini default
+        -h|--help) echo "pakai: ./setup.sh [--verbose]"; exit 0 ;;
+    esac
+done
+# setup.sh verbose → teruskan --verbose ke script.sh (build).
+SCRIPT_ARGS=()
+[ "$QUIET" = 0 ] && SCRIPT_ARGS=(--verbose)
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APPID="axioo-control-center"
+
+log() { [ "$QUIET" = 1 ] || echo "$@"; }
+ok() { echo "$@"; }
+
+# ---- progress-bar mode (dipakai bila --quiet) ----
+TOTAL=7
+LOGFILE="/tmp/axioo-setup.log"
+bar() { # $1 = langkah selesai (0..TOTAL), $2 = label
+    local done=$1 label=${2:-} width=28
+    local fill=$(( done * width / TOTAL ))
+    local empty=$(( width - fill ))
+    local f e
+    printf -v f '%*s' "$fill" ''; f=${f// /█}
+    printf -v e '%*s' "$empty" ''; e=${e// /░}
+    printf '\r\033[K[%s%s] %d/%d %s' "$f" "$e" "$done" "$TOTAL" "$label"
+}
+# Perintah diam (stdout/stderr → log) + spinner di baris progress.
+# $1 = nomor langkah, $2 = label, sisanya = perintah.
+quiet_run() {
+    local step=$1 label=$2; shift 2
+    local spin='|/-\' i=0 pid rc
+    "$@" >>"$LOGFILE" 2>&1 & pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        bar "$(( step - 1 ))" "$label ${spin:i%4:1}"
+        i=$(( i + 1 )); sleep 0.15
+    done
+    wait "$pid"; rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo
+        echo "GAGAL [$label] (rc=$rc) — buntut log:"
+        tail -n 20 "$LOGFILE"
+        exit "$rc"
+    fi
+    bar "$step" "$label ✓"; echo
+}
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "butuh '$1' — install dulu"; exit 1; }; }
 need curl
@@ -21,14 +69,26 @@ need gcc
 need make
 command -v cargo >/dev/null 2>&1 || { echo "butuh rust (rustup.rs) — install dulu"; exit 1; }
 
-echo "=== [0b/4] system deps (pacman, idempoten) ==="
+if [ "$QUIET" = 1 ]; then
+    : >"$LOGFILE"
+    echo "axioo setup — progress (log: $LOGFILE)"
+    sudo -v
+fi
+
+log "=== [0b/4] system deps (pacman, idempoten) ==="
 # Prasyarat Tauri v2 di Arch (webkit/gtk/indikator) + build tools + DKMS.
 # --needed = lewati yang sudah ada; rust TIDAK disentuh (pakai toolchain user).
-sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
-    python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
-    librsvg openssl appmenu-gtk-module 2>&1 | tail -n 3 || true
+if [ "$QUIET" = 1 ]; then
+    quiet_run 1 "system deps" sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
+        python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
+        librsvg openssl appmenu-gtk-module
+else
+    sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
+        python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
+        librsvg openssl appmenu-gtk-module 2>&1 | tail -n 3 || true
+fi
 
-echo "=== [0/4] cek AUR helper (buat driver clevo) ==="
+log "=== [0/4] cek AUR helper (buat driver clevo) ==="
 if ls -d /usr/src/clevo-drivers-* >/dev/null 2>&1; then
     AUR_METHOD="skip (source driver sudah ada)"
 elif command -v yay >/dev/null 2>&1; then
@@ -43,31 +103,45 @@ else
     echo "  atau install yay/paru dari AUR"
     exit 1
 fi
-echo "AUR: $AUR_METHOD"
+[ "$QUIET" = 1 ] || echo "AUR: $AUR_METHOD"
 
-echo "=== [1/4] kernel headers ==="
+log "=== [1/4] kernel headers ==="
 if [ ! -d "/lib/modules/$(uname -r)/build" ]; then
-    echo "install linux-headers…"
-    sudo pacman -S --needed --noconfirm linux-headers
+    log "install linux-headers…"
+    if [ "$QUIET" = 1 ]; then
+        quiet_run 2 "kernel headers" sudo pacman -S --needed --noconfirm linux-headers
+    else
+        sudo pacman -S --needed --noconfirm linux-headers
+    fi
+elif [ "$QUIET" = 1 ]; then
+    bar 2 "kernel headers (sudah ada) ✓"; echo
 fi
 
-echo "=== [2/4] base driver clevo-drivers-dkms-git ($AUR_METHOD) ==="
+log "=== [2/4] base driver clevo-drivers-dkms-git ($AUR_METHOD) ==="
 case "$AUR_METHOD" in
-    skip*) echo "source driver sudah ada, lewati." ;;
-    yay) yay -S --needed --noconfirm clevo-drivers-dkms-git ;;
-    paru) paru -S --needed --noconfirm clevo-drivers-dkms-git ;;
+    skip*) log "source driver sudah ada, lewati."; [ "$QUIET" = 1 ] && { bar 3 "base driver (sudah ada) ✓"; echo; } ;;
+    yay) if [ "$QUIET" = 1 ]; then quiet_run 3 "base driver" yay -S --needed --noconfirm clevo-drivers-dkms-git; else yay -S --needed --noconfirm clevo-drivers-dkms-git; fi ;;
+    paru) if [ "$QUIET" = 1 ]; then quiet_run 3 "base driver" paru -S --needed --noconfirm clevo-drivers-dkms-git; else paru -S --needed --noconfirm clevo-drivers-dkms-git; fi ;;
     manual*)
-        echo "tanpa yay/paru — clone + makepkg manual…"
+        log "tanpa yay/paru — clone + makepkg manual…"
         rm -rf /tmp/clevo-drivers-aur && git clone https://aur.archlinux.org/clevo-drivers-dkms-git.git /tmp/clevo-drivers-aur
-        (cd /tmp/clevo-drivers-aur && makepkg -si --noconfirm)
+        if [ "$QUIET" = 1 ]; then quiet_run 3 "base driver" bash -c 'cd /tmp/clevo-drivers-aur && makepkg -si --noconfirm'; else (cd /tmp/clevo-drivers-aur && makepkg -si --noconfirm); fi
         ;;
 esac
 
-echo "=== [3/4] quirk Studio X + DKMS install (sudo) ==="
-sudo "$HERE/packaging/clevo-drivers-axioo/install.sh"
+log "=== [3/4] quirk Studio X + DKMS install (sudo) ==="
+if [ "$QUIET" = 1 ]; then
+    quiet_run 4 "quirk DKMS" sudo "$HERE/packaging/clevo-drivers-axioo/install.sh"
+else
+    sudo "$HERE/packaging/clevo-drivers-axioo/install.sh"
+fi
 
-echo "=== [4/4] build + AppImage ==="
-"$HERE/script.sh"
+log "=== [4/4] build + AppImage ==="
+if [ "$QUIET" = 1 ]; then
+    quiet_run 5 "build + AppImage" "$HERE/script.sh" "${SCRIPT_ARGS[@]}"
+else
+    "$HERE/script.sh" "${SCRIPT_ARGS[@]}"
+fi
 # Bundle dir = cargo target dir workspace root ($HERE/target — BUKAN
 # src-tauri/target; terbukti via `cargo metadata ... target_directory`).
 # Nama gaya tauri v2: axioo-control-center_<ver>_amd64.AppImage; dist/
@@ -82,24 +156,46 @@ IMG="$(ls -t "${CANDS[@]}" | head -1)"
 cp -f "$IMG" "$HERE/dist/" 2>/dev/null || true
 IMG="$HERE/dist/$(basename "$IMG")"
 [ -f "$IMG" ] || { echo "ERROR: gagal mengarsipkan $IMG"; exit 1; }
-echo "AppImage: $IMG"
+log "AppImage: $IMG"
 
-echo "=== [4b/4] axiood daemon + D-Bus + udev (sudo) ==="
-if [ -f "$HERE/target/release/axiood" ]; then
-    echo "install axiood + D-Bus config + systemd unit…"
+log "=== [4b/4] axiood daemon + D-Bus + udev (sudo) ==="
+_daemon_install_silent() {
     sudo install -Dm755 "$HERE/target/release/axiood" /usr/bin/axiood
     sudo install -Dm644 "$HERE/packaging/com.axioo.Control.conf" /etc/dbus-1/system.d/com.axioo.Control.conf
     sudo install -Dm644 "$HERE/packaging/com.axioo.Control.policy" /usr/share/polkit-1/actions/com.axioo.Control.policy
     sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
-    sudo udevadm control --reload-rules 2>/dev/null || true
+    sudo udevadm control --reload-rules || true
     sudo systemctl daemon-reload
-    echo "enable & start axiood…"
-    sudo systemctl enable --now axiood 2>&1 | head -n 20 || true
-    echo "axiood: $(systemctl is-active axiood 2>/dev/null || echo unknown)"
+    sudo systemctl enable --now axiood || true
+    # Default kipas = EC auto (instalasi lama perlu disetel eksplisit sekali).
+    busctl --system call com.axioo.Control /com/axioo/Control com.axioo.Control SetFanEcAuto b true || true
+}
+if [ -f "$HERE/target/release/axiood" ]; then
+    log "install axiood + D-Bus config + systemd unit…"
+    if [ "$QUIET" = 1 ]; then
+        quiet_run 6 "daemon + EC auto" _daemon_install_silent
+    else
+        sudo install -Dm755 "$HERE/target/release/axiood" /usr/bin/axiood
+        sudo install -Dm644 "$HERE/packaging/com.axioo.Control.conf" /etc/dbus-1/system.d/com.axioo.Control.conf
+        sudo install -Dm644 "$HERE/packaging/com.axioo.Control.policy" /usr/share/polkit-1/actions/com.axioo.Control.policy
+        sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
+        sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
+        sudo udevadm control --reload-rules 2>/dev/null || true
+        sudo systemctl daemon-reload
+        echo "enable & start axiood…"
+        sudo systemctl enable --now axiood 2>&1 | head -n 20 || true
+        echo "axiood: $(systemctl is-active axiood 2>/dev/null || echo unknown)"
+    fi
+    # Default kipas = EC auto: daemon baru default true + instalasi lama
+    # disetel eksplisit di _daemon_install_silent (quiet) / di bawah (verbose).
+    if [ "$QUIET" = 0 ]; then
+        echo "fan default: EC auto…"
+        busctl --system call com.axioo.Control /com/axioo/Control com.axioo.Control SetFanEcAuto b true 2>&1 | head -n 5 || true
+    fi
 fi
 
-echo "=== install AppImage + axioo-ctl ==="
+log "=== install AppImage + axioo-ctl ==="
 # JANGAN taruh di ~/Applications: appimagelauncherd menganggap folder itu
 # databasenya sendiri — AppImage yang dicopy manual di-rename (suffix md5),
 # di-unintegrate, dan file desktop kita ikut dibersihkan. Lokasi di bawah
@@ -156,6 +252,12 @@ StartupWMClass=$APPCLASS
 EOF
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+[ "$QUIET" = 1 ] && { bar 7 "app ✓"; echo; }
+
+if [ "$QUIET" = 1 ]; then
+    ok "OK: driver + app + axiood (fan EC auto) terinstall — reboot sekali."
+    exit 0
+fi
 
 echo
 echo "OK semua:"
