@@ -163,4 +163,6 @@ echo "  driver : ls /sys/class/leds/ | grep kbd   (mesti ada rgb:kbd_backlight*)
 echo "  app    : $APPIMG"
 echo "  menu   : cari 'Axioo Control Center' di launcher"
 echo "  tray   : login → mulai di tray (matikan via Settings / menu tray)"
+echo "  REBOOT SEKALI: driver DKMS + udev + grup video + daemon baru aktif bersih"
+echo "             habis reboot (wajib biar tombol Keyboard/Baterai tidak read-only)."
 echo "  bersih : ./uninstall.sh  (hapus total: daemon + AppImage + cache)"

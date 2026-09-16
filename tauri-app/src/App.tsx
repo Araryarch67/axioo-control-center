@@ -697,9 +697,9 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
             spellCheck={false} className="field !w-28 num" />
           <span className="num text-[12px] text-faint">rgb({r}, {g}, {b})</span>
         </div>
-        <p className="mt-3 font-mono text-[11px] text-faint">perubahan langsung ditulis ke LED — tanpa tombol apply.</p>
+        <p className="mt-3 font-mono text-[11px] text-faint">perubahan langsung ditulis ke LED - tanpa tombol apply.</p>
         {snap && !snap.kbd_writable && snap.kbd_nodes > 0 && (
-          <p className="mt-1 font-mono text-[11px] text-accent">sysfs read-only — jalankan ./setup.sh (udev rule + grup video), lalu re-login + restart app.</p>
+          <p className="mt-1 font-mono text-[11px] text-accent">sysfs read-only - jalankan ./setup.sh lalu reboot.</p>
         )}
       </Card>
     </div>
@@ -738,7 +738,7 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
           Save thresholds
         </CButton>
         {snap && !snap.bat_writable && (
-          <p className="mt-2 font-mono text-[11px] text-accent">sysfs read-only — jalankan ./install-system.sh lalu restart app.</p>
+          <p className="mt-2 font-mono text-[11px] text-accent">sysfs read-only - jalankan ./setup.sh lalu reboot.</p>
         )}
       </Card>
       <Card className="col-span-12">
