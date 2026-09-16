@@ -7,8 +7,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EFFECTS, REAR_EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
 import { useStore, applyTheme, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
-import { refreshMatugen } from "@/lib/matugen";
-import { cn, curveDuty, fmt1, hexToRgb } from "@/lib/utils";
+import { matugenVivid, refreshMatugen } from "@/lib/matugen";
+import { cn, curveDuty, fmt1, hexToRgb, rgbToHex } from "@/lib/utils";
 import { Bar, Card, CardTitle, CButton, Chip, Seg, Switch, Toast } from "@/components/ui";
 import { Stat, SpecRow } from "@/components/Gauge";
 import { KeyboardVisual } from "@/components/KeyboardVisual";
@@ -541,6 +541,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
     setFx(f);
     lastFxChange.current = Date.now();
     markDirty();
+    if (f !== "static") setFollow(false);
     if (!canWrite || !validHex) return;
     window.clearTimeout(timer.current);
     applyNow(f, bright, hex, zone, speed, rearFx);
@@ -549,11 +550,55 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
   const pickRear = (r: string) => {
     setRearFx(r);
     lastFxChange.current = Date.now();
+    if (r !== "follow") setFollow(false);
     if (!canWrite || !validHex) return;
     window.clearTimeout(timer.current);
     // Langsung apply (tanpa markDirty agar debounce tak double-spawn).
     applyNow(fx, bright, hex, zone, speed, r);
   };
+
+  // Ikuti wallpaper: warna paling vivid matugen → SEMUA zona (keyboard + rear).
+  // Matikan efek dulu agar thread animasi tak menimpa hasil tulis.
+  const follow = useStore((s) => s.kbdFollowWp);
+  const setFollow = useStore((s) => s.setKbdFollowWp);
+  const followRev = React.useRef(0);
+  const applyFollow = async (b: number): Promise<boolean> => {
+    const c = await matugenVivid();
+    if (!c) { setStatus("matugen tak terbaca — cek Ryoku"); return false; }
+    const h = rgbToHex(c[0], c[1], c[2]);
+    setHex(h); setDraft(h);
+    setFx("static"); setRearFx("follow");
+    lastFxChange.current = Date.now();
+    try {
+      await api.kbdEffectStop();
+      await api.kbdSet(null, Math.min(b, max), c[0], c[1], c[2]);
+      setStatus(`ikut wallpaper · ${new Date().toLocaleTimeString("en-GB")}`);
+      return true;
+    } catch (e) {
+      setStatus(`gagal: ${String(e).slice(0, 110)}`);
+      return false;
+    }
+  };
+  const flipFollow = () => {
+    if (!canWrite) return;
+    if (!follow) {
+      markDirty();
+      setFollow(true);
+      void applyFollow(bright);
+    } else {
+      setFollow(false);
+      setStatus("sinkron");
+    }
+  };
+  // Wallpaper ganti (revisi palet naik) → LED ikut. Tanpa timer tambahan.
+  React.useEffect(() => {
+    const rev = snap?.matugen_rev ?? 0;
+    if (!follow || rev === 0 || rev === followRev.current) return;
+    followRev.current = rev;
+    markDirty();
+    void applyFollow(bright);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap?.matugen_rev]);
 
   // Live-apply debounce; lewati bila invalid atau sudah sinkron.
   React.useEffect(() => {
@@ -594,7 +639,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
       <Card className="col-span-12">
         <CardTitle icon={<Keyboard size={14} />}
           right={<Chip on={canWrite} color={canWrite ? "ok" : undefined}>
-            {`live · ${zoneName(zone)}`} · {fx !== "static" ? `${fx} · ` : ""}{status}
+            {`live · ${zoneName(zone)}`} · {follow ? "ikut wallpaper · " : ""}{fx !== "static" ? `${fx} · ` : ""}{status}
           </Chip>}>
           Live map — klik untuk pilih zona{fx !== "static" ? " · beranimasi" : ""}
         </CardTitle>
@@ -615,6 +660,13 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
           </Chip>}>
           Effect — animasi semua zona
         </CardTitle>
+        <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border-2 border-hair px-3 py-2.5">
+          <div>
+            <div className="text-[13px] font-black uppercase">Ikuti wallpaper</div>
+            <div className="mt-0.5 text-[11.5px] text-faint">keyboard + rear = warna paling vivid matugen · warna manual bertahan sampai wallpaper ganti · efek animasi mematikan ini</div>
+          </div>
+          <Switch on={follow} disabled={!canWrite} onClick={flipFollow} />
+        </div>
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
           {EFFECTS.map((e) => (
             <button key={e.id} title={e.desc} onClick={() => pickEffect(e.id)}

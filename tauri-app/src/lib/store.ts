@@ -47,6 +47,9 @@ interface AppStore {
   setKbdRearFx: (f: string) => void;
   kbdSpeed: number;
   setKbdSpeed: (s: number) => void;
+  /** Ikuti wallpaper: keyboard + rear = primary matugen tiap wallpaper ganti. Persist. */
+  kbdFollowWp: boolean;
+  setKbdFollowWp: (b: boolean) => void;
   kbdDirty: boolean;
   markKbdDirty: () => void;
   kbdHydrated: boolean;
@@ -163,6 +166,8 @@ export const useStore = create<AppStore>()(
       setKbdRearFx: (kbdRearFx) => set({ kbdRearFx }),
       kbdSpeed: 1,
       setKbdSpeed: (kbdSpeed) => set({ kbdSpeed }),
+      kbdFollowWp: false,
+      setKbdFollowWp: (kbdFollowWp) => set({ kbdFollowWp }),
       kbdDirty: false,
       markKbdDirty: () => set({ kbdDirty: true }),
       kbdHydrated: false,
@@ -201,6 +206,7 @@ export const useStore = create<AppStore>()(
         kbdFx: s.kbdFx,
         kbdRearFx: s.kbdRearFx,
         kbdSpeed: s.kbdSpeed,
+        kbdFollowWp: s.kbdFollowWp,
         fanCurve: s.fanCurve,
         fanManualDuty: s.fanManualDuty,
       }),

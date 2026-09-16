@@ -64,3 +64,42 @@ export async function refreshMatugen(): Promise<boolean> {
     return false;
   }
 }
+
+/** Warna paling vivid matugen — untuk LED (warna muted kelihatan mati). */
+const VIVID_KEYS = [
+  "primary", "secondary", "tertiary",
+  "color1", "color2", "color3", "color4", "color5", "color6",
+  "color9", "color10", "color11", "color12", "color13", "color14",
+];
+
+/** Skor vivid: saturasi × value (0–1). Putih/abu → 0, warna gelap → kecil. */
+function vividScore([r, g, b]: [number, number, number]): number {
+  const mx = Math.max(r, g, b) / 255;
+  const mn = Math.min(r, g, b) / 255;
+  if (mx === 0) return 0;
+  return ((mx - mn) / mx) * mx;
+}
+
+export async function matugenVivid(): Promise<[number, number, number] | null> {
+  try {
+    const pal = await api.matugen();
+    let best: [number, number, number] | null = null;
+    let bestScore = 0.05; // di bawah ini = palet abu semua → fallback primary
+    for (const k of VIVID_KEYS) {
+      const h = pal[k];
+      if (!h || !/^#[0-9a-fA-F]{6}$/.test(h)) continue;
+      const c = hexToRgb(h);
+      const s = vividScore(c);
+      if (s > bestScore) {
+        bestScore = s;
+        best = c;
+      }
+    }
+    if (best) return best;
+    const p = pal["primary"];
+    if (p && /^#[0-9a-fA-F]{6}$/.test(p)) return hexToRgb(p);
+    return null;
+  } catch {
+    return null;
+  }
+}
