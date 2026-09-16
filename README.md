@@ -10,15 +10,16 @@
 **Linux hardware control for Axioo laptops (Clevo-based) — a from-scratch
 Rust replacement for the Windows-only Clevo Control Center.**
 
-*Live sensors · one-shot fan control · 5-zone RGB keyboard + rear FX · charge limits —
-in a dark, mono, keyboard-first UI.*
+*Live sensors · one-shot fan control · 4-zone RGB keyboard + rear exhaust · charge limits —
+in a dark, mono, keyboard-first UI (now with a live MATUGEN theme).* 
 
 </div>
 
-Live sensors, one-shot fan control with a draggable curve, 5-zone RGB
-keyboard backlight (left/center/right + numpad + rear exhaust, 12 animated
-effects incl. independent rear), and charge limits — in a
-dark, mono, keyboard-first desktop UI (Tauri).
+Live sensors, one-shot fan control with a draggable curve, 4-zone RGB
+keyboard backlight (left/center/right + numpad, plus independent rear
+exhaust, 12 animated effects), and charge limits — in a
+dark, mono, keyboard-first desktop UI (Tauri, with a live MATUGEN theme
+that follows the Ryoku wallpaper).
 
 ## The app
 
@@ -27,9 +28,9 @@ dark, mono, keyboard-first desktop UI (Tauri).
 | Dashboard | CPU/GPU temps, clocks, fans, battery, memory, package power — one glance |
 | Performance | Balanced/Entertainment/Performance modes + quiet-fan, package power caps |
 | Fan | Curve / Manual / EC-auto modes, **draggable** fan curve, live RPM + EC status |
-| Keyboard | Per-zone brightness, presets + **custom RGB picker**, 12 animated effects + independent rear-exhaust FX, live visualizer |
+| Keyboard | Per-zone brightness (4 zones + 1 rear), presets + **custom RGB picker**, 12 animated effects + independent rear-exhaust FX, live visualizer |
 | Power | Battery, FlexiCharger start/end thresholds, CPU package power |
-| Settings | Theme, start-saat-login (tray), service status (daemon, sysfs writability) |
+| Settings | Theme (incl. **MATUGEN** — follows Ryoku wallpaper live), start-saat-login (tray), service status (daemon, sysfs writability) |
 
 Session state (tab, theme, keyboard zone/color/effect, fan curve/duty)
 persists across restarts (zustand persist, `axioo-center`).
@@ -44,9 +45,9 @@ persists across restarts (zustand persist, `axioo-center`).
 |---|---|
 | 🌡️ Dashboard | Live CPU/GPU temps, frequencies, fans, battery, memory, RAPL power |
 | 🌀 Fan control | One-shot `set`/`auto` (root, clamped 40–100%, both fans, `0xCE`-verified), draggable curve with live snapshot |
-| ⌨️ Keyboard | 5-zone RGB (left/center/right/**numpad**/rear exhaust), 12 animated effects + independent rear FX, presets + custom RGB picker, per-zone visualizer, brightness steppers |
+| ⌨️ Keyboard | 4-zone RGB (left/center/right/**numpad**) + rear exhaust, 12 animated effects + independent rear FX, presets + custom RGB picker, per-zone visualizer, brightness steppers |
 | 🔋 Charge limit | FlexiCharger start/end thresholds (e.g. 80→90%) via standard kernel API |
-| 🖥️ GUI | Tauri desktop app (runs as user, talks to `axiood` via D-Bus): Dashboard, Performance, Fan, Keyboard, Power, Settings |
+| 🖥️ GUI | Tauri desktop app (runs as user, talks to `axiood` via D-Bus): Dashboard, Performance, Fan, Keyboard, Power, Settings — 6 static themes + **MATUGEN** (live from `~/.cache/ryoku/colors.json`) |
 | 📦 Distro | `script.sh` builds a portable AppImage; `setup.sh` does driver → patch → build → install |
 
 ## Quickstart
@@ -113,7 +114,8 @@ ad-hoc writes. See [`AGENTS.md`](AGENTS.md) and
 ## Roadmap
 
 - [x] Fan map validation + one-shot control + draggable curve
-- [x] Keyboard quirk (0x17 → 3-zone + numpad via EC `0x0B` + rear lightbar via EC `0x07`, putih otomatis habis install) + GUI panel (12 efek + rear independen)
+- [x] Keyboard quirk (0x17 → 3-zone + numpad via EC `0x0B` = 4 zones, + rear lightbar via EC `0x07`, putih otomatis habis install) + GUI panel (12 efek + rear independen, label "4 zones + 1 rear")
+- [x] MATUGEN theme — GUI ikut wallpaper Ryoku live (`get_matugen` + `matugen_rev` tanpa timer tambahan; tested `cargo test -p axioo-center`)
 - [x] FlexiCharger thresholds + AppImage + session persistence
 - [x] `axiood` daemon (continuous curve/cap loop, D-Bus, two-way PPD sync; `cargo check --workspace` hijau)
 - [x] CPU/GPU profiles — RAPL PL1/PL2 via axiood (44/120W Balanced, 44/160W Perf/Ent), EPP/governor milik PPD, NVIDIA `power.limit` N/A di mesin ini (lihat `nvidia::gpus`)
@@ -141,7 +143,7 @@ the Studio X. Other models: validate read-only first.
 
 | Model | Status |
 |---|---|
-| Pongo Studio X 2025 (X560WNR-SU9) | ✅ tested: fan map, 5-zone kbd, charge limits |
+| Pongo Studio X 2025 (X560WNR-SU9) | ✅ tested: fan map, 4-zone + rear kbd, charge limits |
 | Other Pongo / Clevo | ❌ untested — validate read-only first |
 
 ## Credits
