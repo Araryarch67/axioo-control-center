@@ -254,8 +254,31 @@ update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 [ "$QUIET" = 1 ] && { bar 7 "app ✓"; echo; }
 
+ask_reboot() {
+    # Tanya reboot hanya bila ada terminal interaktif (dilewati di CI/pipe
+    # tanpa tty). Bila stdin pipe tapi terminal ada (curl|bash), baca via
+    # /dev/tty. Default Tidak — reboot tak pernah dipaksa.
+    local ans=n
+    echo "kamu perlu reboot agar driver DKMS + udev + daemon aktif bersih."
+    if [ -t 0 ]; then
+        printf 'reboot sekarang? (y/n) [n] '
+        read -r ans || ans=n
+    elif ( : </dev/tty ) 2>/dev/null; then
+        printf 'reboot sekarang? (y/n) [n] '
+        { read -r ans </dev/tty; } 2>/dev/null || ans=n
+    else
+        echo "reboot manual: sudo reboot"
+        return
+    fi
+    case "$ans" in
+        y|Y|ya|iya|yes) echo "reboot…"; sudo reboot ;;
+        *) echo "OK — reboot manual nanti: sudo reboot" ;;
+    esac
+}
+
 if [ "$QUIET" = 1 ]; then
-    ok "OK: driver + app + axiood (fan EC auto) terinstall — reboot sekali."
+    ok "OK: driver + app + axiood (fan EC auto) terinstall."
+    ask_reboot
     exit 0
 fi
 
@@ -268,3 +291,5 @@ echo "  tray   : login → mulai di tray (matikan via Settings / menu tray)"
 echo "  REBOOT SEKALI: driver DKMS + udev + grup video + daemon baru aktif bersih"
 echo "             habis reboot (wajib biar tombol Keyboard/Baterai tidak read-only)."
 echo "  bersih : ./uninstall.sh  (hapus total: daemon + AppImage + cache)"
+echo
+ask_reboot

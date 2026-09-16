@@ -39,6 +39,30 @@ APPID="axioo-control-center"
 TAURI_ID="com.axioo.ControlCenter"
 LEFTOVER=0
 
+# Progress-bar default (detail → /tmp/axioo-uninstall.log); --verbose = mentah.
+QUIET=1
+TOTAL=6
+LOGFILE="/tmp/axioo-uninstall.log"
+bar() { # $1 = langkah selesai (0..TOTAL), $2 = label
+    local done=$1 label=${2:-} width=28
+    local fill=$(( done * width / TOTAL ))
+    local empty=$(( width - fill ))
+    local f e
+    printf -v f '%*s' "$fill" ''; f=${f// /█}
+    printf -v e '%*s' "$empty" ''; e=${e// /░}
+    printf '\r\033[K[%s%s] %d/%d %s' "$f" "$e" "$done" "$TOTAL" "$label"
+}
+spin_wait() { # $1 step, $2 label, $3 pid → spinner sampai pid selesai (gagal OK)
+    local step=$1 label=$2 pid=$3 spin='|/-\' i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        bar "$(( step - 1 ))" "$label ${spin:i%4:1}"
+        i=$(( i + 1 )); sleep 0.15
+    done
+    wait "$pid" || true
+    bar "$step" "$label ✓"; echo
+}
+: >"$LOGFILE"
+
 for a in "$@"; do
     case "$a" in
         -h|--help)
