@@ -65,39 +65,39 @@ export async function refreshMatugen(): Promise<boolean> {
   }
 }
 
-/** Warna paling vivid matugen — untuk LED (warna muted kelihatan mati). */
-const VIVID_KEYS = [
-  "primary", "secondary", "tertiary",
-  "color1", "color2", "color3", "color4", "color5", "color6",
-  "color9", "color10", "color11", "color12", "color13", "color14",
-];
-
-/** Skor vivid: saturasi × value (0–1). Putih/abu → 0, warna gelap → kecil. */
-function vividScore([r, g, b]: [number, number, number]): number {
-  const mx = Math.max(r, g, b) / 255;
-  const mn = Math.min(r, g, b) / 255;
-  if (mx === 0) return 0;
-  return ((mx - mn) / mx) * mx;
+/** Warna dominan matugen (primary) yang dicerahkan untuk LED. */
+function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const d = mx - mn;
+  const h = d === 0 ? 0
+    : mx === r ? (((g - b) / d) % 6 + 6) % 6 / 6
+    : mx === g ? (b - r) / d / 6 + 1 / 3
+    : (r - g) / d / 6 + 2 / 3;
+  return [h, mx === 0 ? 0 : d / mx, mx];
 }
 
-export async function matugenVivid(): Promise<[number, number, number] | null> {
+function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
+  const f = (n: number) => {
+    const k = (n + h * 6) % 6;
+    return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+  };
+  return [Math.round(f(5) * 255), Math.round(f(3) * 255), Math.round(f(1) * 255)];
+}
+
+/** Cerahkan: value penuh; warna → saturasi vivid; abu (tak ber-hue) → putih. */
+function brightenLed([r, g, b]: [number, number, number]): [number, number, number] {
+  const [h, s] = rgbToHsv(r, g, b);
+  return hsvToRgb(h, s < 0.03 ? 0 : Math.max(s, 0.7), 1);
+}
+
+export async function matugenDominant(): Promise<[number, number, number] | null> {
   try {
     const pal = await api.matugen();
-    let best: [number, number, number] | null = null;
-    let bestScore = 0.05; // di bawah ini = palet abu semua → fallback primary
-    for (const k of VIVID_KEYS) {
+    for (const k of ["primary", "secondary", "tertiary"]) {
       const h = pal[k];
-      if (!h || !/^#[0-9a-fA-F]{6}$/.test(h)) continue;
-      const c = hexToRgb(h);
-      const s = vividScore(c);
-      if (s > bestScore) {
-        bestScore = s;
-        best = c;
-      }
+      if (h && /^#[0-9a-fA-F]{6}$/.test(h)) return brightenLed(hexToRgb(h));
     }
-    if (best) return best;
-    const p = pal["primary"];
-    if (p && /^#[0-9a-fA-F]{6}$/.test(p)) return hexToRgb(p);
     return null;
   } catch {
     return null;

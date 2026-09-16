@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EFFECTS, REAR_EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
 import { useStore, applyTheme, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
-import { matugenVivid, refreshMatugen } from "@/lib/matugen";
+import { matugenDominant, refreshMatugen } from "@/lib/matugen";
 import { cn, curveDuty, fmt1, hexToRgb, rgbToHex } from "@/lib/utils";
 import { Bar, Card, CardTitle, CButton, Chip, Seg, Switch, Toast } from "@/components/ui";
 import { Stat, SpecRow } from "@/components/Gauge";
@@ -557,13 +557,13 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
     applyNow(fx, bright, hex, zone, speed, r);
   };
 
-  // Ikuti wallpaper: warna paling vivid matugen → SEMUA zona (keyboard + rear).
+  // Ikuti wallpaper: warna dominan matugen yang dicerahkan → SEMUA zona.
   // Matikan efek dulu agar thread animasi tak menimpa hasil tulis.
   const follow = useStore((s) => s.kbdFollowWp);
   const setFollow = useStore((s) => s.setKbdFollowWp);
   const followRev = React.useRef(0);
   const applyFollow = async (b: number): Promise<boolean> => {
-    const c = await matugenVivid();
+    const c = await matugenDominant();
     if (!c) { setStatus("matugen tak terbaca — cek Ryoku"); return false; }
     const h = rgbToHex(c[0], c[1], c[2]);
     setHex(h); setDraft(h);
@@ -663,7 +663,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
         <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border-2 border-hair px-3 py-2.5">
           <div>
             <div className="text-[13px] font-black uppercase">Ikuti wallpaper</div>
-            <div className="mt-0.5 text-[11.5px] text-faint">keyboard + rear = warna paling vivid matugen · warna manual bertahan sampai wallpaper ganti · efek animasi mematikan ini</div>
+            <div className="mt-0.5 text-[11.5px] text-faint">keyboard + rear = warna dominan wallpaper yang dicerahkan · warna manual bertahan sampai wallpaper ganti · efek animasi mematikan ini</div>
           </div>
           <Switch on={follow} disabled={!canWrite} onClick={flipFollow} />
         </div>
