@@ -16,84 +16,86 @@ Rust replacement for the Windows-only Clevo Control Center.**
 
 ## Install
 
-Arch Linux, satu perintah (tanpa sudo — diminta saat perlu):
+Arch Linux, one command (no sudo — you will be asked when needed):
 
 ```sh
 ./setup.sh
 ```
 
-Setup mengerjakan semuanya: driver `clevo-drivers` dari AUR → quirk
-keyboard Studio X → build release + AppImage → install app, daemon
-`axiood`, udev rule, entri desktop. Progress detail di
-`/tmp/axioo-setup.log`; mode berisik: `./setup.sh --verbose`.
-Bongkar total: `./uninstall.sh`.
+Setup does everything: `clevo-drivers` from the AUR → Studio X
+keyboard quirk → release build + AppImage → installs the app, the
+`axiood` daemon, udev rules, and a desktop entry. Full progress in
+`/tmp/axioo-setup.log`; noisy mode: `./setup.sh --verbose`.
+Full removal: `./uninstall.sh`.
 
-Syarat: kernel headers + `yay` (atau AUR helper lain — edit 1 baris di
-`setup.sh`). Butuh driver manual? Lihat
+Requirements: kernel headers + `yay` (or another AUR helper — one line
+in `setup.sh`). Manual driver steps: see
 [`docs/kbd-backlight.md`](docs/kbd-backlight.md).
 
-## Cek instalasi
+## Verify the install
 
 ```sh
-./target/debug/axioo-ctl probe          # kapabilitas hardware
-./target/debug/axioo-ctl kbd status     # expect 5 node: 4 zona + rear
-./target/debug/axioo-ctl fan dump       # butuh sudo + modprobe ec_sys
+./target/debug/axioo-ctl probe          # hardware capabilities
+./target/debug/axioo-ctl kbd status     # expect 5 nodes: 4 zones + rear
+./target/debug/axioo-ctl fan dump       # needs sudo + modprobe ec_sys
 ls /sys/class/leds/ | grep kbd          # rgb:kbd_backlight{,_1,_2,_3,_4}
 ```
 
-Lalu buka app-nya (atau `cd tauri-app && ./dev.sh`).
+Then launch the app (or `cd tauri-app && ./dev.sh`).
 
-## Isinya
+## What's inside
 
 | Tab | What you get |
 |---|---|
 | Dashboard | CPU/GPU temps, clocks, fans, battery, memory, package power — one glance |
 | Performance | Balanced/Entertainment/Performance modes + quiet-fan, package power caps |
 | Fan | Curve / Manual / EC-auto modes, **draggable** fan curve, live RPM + EC status |
-| Keyboard | 4 zones + 1 rear, presets + **custom RGB picker**, 12 animated effects + independent rear-exhaust FX, **Ikuti wallpaper** (matugen), live visualizer |
+| Keyboard | 4 zones + 1 rear, presets + **custom RGB picker**, 12 animated effects + independent rear-exhaust FX, **Follow wallpaper** (matugen), live visualizer |
 | Power | Battery, FlexiCharger start/end thresholds, CPU package power |
-| Settings | Theme (incl. **MATUGEN** — follows wallpaper live), start-saat-login (tray), service status |
+| Settings | Theme (incl. **MATUGEN** — follows wallpaper live), start-at-login (tray), service status |
 
-## Nggak jalan?
+## Not working?
 
-| Gejala | Obat |
+| Symptom | Fix |
 |---|---|
-| Keyboard gelap / `no LED found` | Quirk belum kepasang → `./setup.sh` ulang, lihat `docs/kbd-backlight.md` |
-| Fan control dikunci | Map EC belum tervalidasi di mesinmu → `fan dump` + baca `docs/ec-fan-protocol.md` |
-| App nggak bisa nulis LED/baterai | Udev rule belum aktif → `./setup.sh` ulang lalu reboot |
+| Keyboard dark / `no LED found` | Quirk not installed → re-run `./setup.sh`, see `docs/kbd-backlight.md` |
+| Fan control locked | EC map not validated on your machine → `fan dump` + read `docs/ec-fan-protocol.md` |
+| App can't write LEDs/battery | Udev rule not active → re-run `./setup.sh`, then reboot |
 
 > **Tested only on the Pongo Studio X 2025 (X560WNR-SU9).**
-> Pongo lain: install jalan, tapi tulis kipas dikunci sampai map EC
-> tervalidasi — mulai read-only (`probe`, `fan dump`, `kbd status`).
-> Punya model lain? Buka issue dengan output `probe` + DMI.
+> Other Pongo models: install works, but fan writes stay locked until
+> the EC map is validated — start read-only (`probe`, `fan dump`,
+> `kbd status`). Got another model? Open an issue with your `probe`
+> output + DMI.
 
-## Hardware yang didukung
+## Supported hardware
 
-Studio X 2025 = barebone **Clevo X560WNR** — profilnya berlaku juga
-buat rebrand satu barebone (tentap wajib `validate` per mesin,
-firmware tiap merek bisa beda dikit):
+Studio X 2025 is a **Clevo X560WNR** barebone — its profile also covers
+same-barebone rebrands (still requires per-machine `validate`, vendor
+firmware may differ slightly):
 
-| Merek | Model |
+| Brand | Model |
 |---|---|
 | Axioo | Pongo Studio X 2025 (X560WNR-SU9) ✅ tested |
-| Sager / Xotic PC | NP9561R (X560WNR1-G) — sama, belum ada tester |
-| AVADirect | X560WNR-G — sama, belum ada tester |
+| Sager / Xotic PC | NP9561R (X560WNR1-G) — same, no tester yet |
+| AVADirect | X560WNR-G — same, no tester yet |
 
-> Habis update kernel dan keyboard mati? Rebuild DKMS:
-> `sudo dkms autoinstall` lalu `sudo modprobe -r tuxedo_keyboard &&
-> sudo modprobe tuxedo_keyboard` (driver tuxedo rapuh lawan kernel baru).
+> Keyboard dead after a kernel update? Rebuild DKMS:
+> `sudo dkms autoinstall` then `sudo modprobe -r tuxedo_keyboard &&
+> sudo modprobe tuxedo_keyboard` (tuxedo drivers are fragile across
+> new kernels).
 
-## Detail
+## Details
 
-* Cara kerja + safety contract: [`AGENTS.md`](AGENTS.md)
-* Protokol EC kipas: [`docs/ec-fan-protocol.md`](docs/ec-fan-protocol.md)
+* How it works + safety contract: [`AGENTS.md`](AGENTS.md)
+* EC fan protocol: [`docs/ec-fan-protocol.md`](docs/ec-fan-protocol.md)
 * Backlight + quirk: [`docs/kbd-backlight.md`](docs/kbd-backlight.md)
-* Kenapa nggak ada per-key RGB: [`docs/per-key-rgb.md`](docs/per-key-rgb.md)
-* Packaging AUR/systemd/udev: [`docs/packaging.md`](docs/packaging.md)
+* Why there is no per-key RGB: [`docs/per-key-rgb.md`](docs/per-key-rgb.md)
+* AUR/systemd/udev packaging: [`docs/packaging.md`](docs/packaging.md)
 
 ## Credits
 
-Berdiri di atas kerja komunitas Clevo/Axioo Linux —
+Built on community Clevo/Axioo Linux work —
 [hajilok](https://github.com/hajilok/clevo-axioo-dual-fan-linux),
 [kkrdwn](https://github.com/kkrdwn/pongo725-backlight),
 [System76](https://github.com/pop-os/system76-dkms),
@@ -102,8 +104,8 @@ plus [novacustom](https://novacustom.com/clevo-keyboard-backlight-control-for-li
 [ejcosta](https://github.com/ejcosta/clevo-keyboard-backlight),
 [JAmanOG](https://github.com/JAmanOG/colorful-p15-keyboard-backlight),
 [arbitrary-string](https://github.com/arbitrary-string/clevo-control-panel).
-Arsitektur daemon mengikuti [tuxedo-rs](https://github.com/AaronErhardt/tuxedo-rs).
-Makasih semuanya 🙏
+Daemon architecture follows [tuxedo-rs](https://github.com/AaronErhardt/tuxedo-rs).
+Thanks everyone 🙏
 
 ## License
 

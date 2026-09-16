@@ -36,7 +36,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: FanCmd,
     },
-    /// Power profile via axiood (two-way sync dengan PPD).
+    /// Power profile via axiood (two-way sync with PPD).
     Profile {
         #[command(subcommand)]
         cmd: ProfileCmd,
@@ -108,9 +108,9 @@ enum KbdCmd {
     Status,
     /// Print current brightness + RGB.
     Get,
-    /// Naikkan brightness 1 langkah (untuk bind Fn-keys).
+    /// Raise brightness one step (for Fn-key bindings).
     Brighter,
-    /// Turunkan brightness 1 langkah (untuk bind Fn-keys).
+    /// Lower brightness one step (for Fn-key bindings).
     Dimmer,
     /// Set brightness and/or color (mode static).
     Set {
@@ -131,13 +131,13 @@ enum KbdCmd {
     Effect {
         /// Effect name.
         name: String,
-        /// Base color R,G,B (untuk breathing/static).
+        /// Base color R,G,B (for breathing/static).
         #[arg(long)]
         rgb: Option<String>,
         /// Preset color (alt to --rgb).
         #[arg(long)]
         preset: Option<String>,
-        /// Animasi independen rear exhaust (butuh 5 node); "follow" = ikut utama.
+        /// Independent rear-exhaust animation (needs 5 nodes); "follow" = follow main.
         #[arg(long)]
         rear: Option<String>,
     },
@@ -149,7 +149,7 @@ enum BatteryCmd {
     Status,
     /// Print current thresholds (start/end).
     Get,
-    /// Set thresholds (butuh root). Validasi terhadap available list firmware.
+    /// Set thresholds (requires root). Validated against the firmware available list.
     Set {
         /// Start threshold (charging starts when below).
         #[arg(long)]

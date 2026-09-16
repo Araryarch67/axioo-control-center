@@ -93,7 +93,7 @@ pub fn get() {
     let conn = match Connection::system() {
         Ok(c) => c,
         Err(e) => {
-            println!("profile: D-Bus system bus tak terjangkau ({e})");
+            println!("profile: D-Bus system bus unreachable ({e})");
             return;
         }
     };
@@ -110,11 +110,11 @@ pub fn get() {
             println!("axioo profile: {p} [{q}] (PPD: {ppd})");
             return;
         }
-        println!("profile: daemon tak menjawab — fallback ke PPD langsung");
+        println!("profile: daemon not responding — falling back to PPD directly");
     }
     match ppd_get(&conn) {
-        Some(p) => println!("PPD ActiveProfile: {p} (axiood tidak jalan)"),
-        None => println!("profile: PPD tak terjangkau (daemon mati + PPD mati?)"),
+        Some(p) => println!("PPD ActiveProfile: {p} (axiood not running)"),
+        None => println!("profile: PPD unreachable (daemon off + PPD off?)"),
     }
 }
 
@@ -122,27 +122,27 @@ pub fn set(name: &str) {
     let conn = match Connection::system() {
         Ok(c) => c,
         Err(e) => {
-            println!("profile: D-Bus system bus tak terjangkau ({e})");
+            println!("profile: D-Bus system bus unreachable ({e})");
             return;
         }
     };
     if let Ok(proxy) = AxiooControlProxyBlocking::new(&conn) {
         match proxy.set_profile(name) {
             Ok(applied) => {
-                println!("axioo profile -> {applied} (via axiood, PPD ikut diselaraskan)");
+                println!("axioo profile -> {applied} (via axiood, PPD synced too)");
                 return;
             }
-            Err(e) => println!("profile: daemon menolak ({e}) — fallback ke PPD langsung"),
+            Err(e) => println!("profile: daemon refused ({e}) — falling back to PPD directly"),
         }
     }
     let Some(ppd) = to_ppd(name) else {
-        println!("profile: '{name}' tak dikenal (pilih: Balanced/Entertainment/Performance)");
+        println!("profile: '{name}' unknown (choose: Balanced/Entertainment/Performance)");
         return;
     };
     if ppd_set(&conn, ppd) {
-        println!("PPD -> {ppd} (axiood tidak jalan; RAPL/kurva tidak di-apply)");
+        println!("PPD -> {ppd} (axiood not running; RAPL/curve not applied)");
     } else {
-        println!("profile: set PPD gagal (butuh polkit? coba lagi)");
+        println!("profile: failed to set PPD (needs polkit? try again)");
     }
 }
 
@@ -151,20 +151,20 @@ pub fn quiet_fan(action: &str) {
     let conn = match Connection::system() {
         Ok(c) => c,
         Err(e) => {
-            println!("profile: D-Bus system bus tak terjangkau ({e})");
+            println!("profile: D-Bus system bus unreachable ({e})");
             return;
         }
     };
     let proxy = match AxiooControlProxyBlocking::new(&conn) {
         Ok(p) => p,
         Err(_) => {
-            println!("profile: axiood tidak jalan (quiet-fan butuh daemon)");
+            println!("profile: axiood not running (quiet-fan needs daemon)");
             return;
         }
     };
     // Daemon path absent → proxy exists but calls fail with ServiceUnknown.
     if proxy.get_profile().is_err() {
-        println!("profile: axiood tidak jalan (quiet-fan butuh daemon)");
+        println!("profile: axiood not running (quiet-fan needs daemon)");
         return;
     }
     let want = match action.to_ascii_lowercase().as_str() {
@@ -174,7 +174,7 @@ pub fn quiet_fan(action: &str) {
         "status" => {
             match proxy.get_quiet_fan() {
                 Ok(q) => println!("quiet-fan: {}", if q { "ON" } else { "off" }),
-                Err(e) => println!("profile: baca quiet-fan gagal ({e})"),
+                Err(e) => println!("profile: failed to read quiet-fan ({e})"),
             }
             return;
         }
@@ -183,8 +183,8 @@ pub fn quiet_fan(action: &str) {
     match want {
         Some(q) => match proxy.set_quiet_fan(q) {
             Ok(label) => println!("axioo profile -> {label}"),
-            Err(e) => println!("profile: set quiet-fan gagal ({e})"),
+            Err(e) => println!("profile: failed to set quiet-fan ({e})"),
         },
-        None => println!("profile: aksi '{action}' tak dikenal (pilih: on/off/toggle/status)"),
+        None => println!("profile: unknown action '{action}' (choose: on/off/toggle/status)"),
     }
 }

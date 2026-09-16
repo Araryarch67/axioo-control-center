@@ -157,7 +157,7 @@ export default function App() {
           <div className="mx-auto max-w-[1360px] p-6">
             {!isTauri() && (
               <div className="card mb-4 flex items-center gap-2.5 !border-accent/50 p-3.5 text-[13px] text-accent">
-                Buka lewat aplikasi Axioo Control Center (./dev.sh), bukan di browser.
+                Open via the Axioo Control Center app (./dev.sh), not in a browser.
               </div>
             )}
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
@@ -319,7 +319,7 @@ function Performance({ snap, busy, run }: { snap: Snapshot | null; busy: boolean
         <Stat label="Package power" value={fmt1(snap?.pkg_watts, "W")} sub="Balanced 44/120W · Ent/Perf 44/160W" />
       </Card>
       {!snap?.profile.daemon && (
-        <p className="col-span-12 font-mono text-[11.5px] text-accent">axiood offline — jalankan ./setup.sh lalu restart app.</p>
+        <p className="col-span-12 font-mono text-[11.5px] text-accent">axiood offline — run ./setup.sh then restart the app.</p>
       )}
     </div>
   );
@@ -439,7 +439,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
   const nZoneTotal = snap?.kbd_zones.length ?? 0;
   /** Indeks 4 dari 5+ zona = lightbar exhaust belakang (EC 0x07). */
   const zoneName = (i: number | null) =>
-    i == null ? "semua" : nZoneTotal >= 5 && i === 4 ? "Rear" : `Z${i + 1}`;
+    i == null ? "all" : nZoneTotal >= 5 && i === 4 ? "Rear" : `Z${i + 1}`;
   const [status, setStatus] = React.useState("…");
   const [animT, setAnimT] = React.useState(0);
   const lastFxChange = React.useRef(0);
@@ -472,7 +472,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
       }
       setStatus(`live · ${new Date().toLocaleTimeString("en-GB")}`);
     } catch (e) {
-      setStatus(`gagal: ${String(e).slice(0, 110)}`);
+      setStatus(`failed: ${String(e).slice(0, 110)}`);
     }
   }, []);
 
@@ -564,7 +564,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
   const followRev = React.useRef(0);
   const applyFollow = async (b: number): Promise<boolean> => {
     const c = await matugenDominant();
-    if (!c) { setStatus("matugen tak terbaca — cek Ryoku"); return false; }
+    if (!c) { setStatus("matugen unreadable — check Ryoku"); return false; }
     const h = rgbToHex(c[0], c[1], c[2]);
     setHex(h); setDraft(h);
     setFx("static"); setRearFx("follow");
@@ -572,10 +572,10 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
     try {
       await api.kbdEffectStop();
       await api.kbdSet(null, Math.min(b, max), c[0], c[1], c[2]);
-      setStatus(`ikut wallpaper · ${new Date().toLocaleTimeString("en-GB")}`);
+      setStatus(`following wallpaper · ${new Date().toLocaleTimeString("en-GB")}`);
       return true;
     } catch (e) {
-      setStatus(`gagal: ${String(e).slice(0, 110)}`);
+      setStatus(`failed: ${String(e).slice(0, 110)}`);
       return false;
     }
   };
@@ -587,7 +587,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
       void applyFollow(bright);
     } else {
       setFollow(false);
-      setStatus("sinkron");
+      setStatus("in sync");
     }
   };
   // Wallpaper ganti (revisi palet naik) → LED ikut. Tanpa timer tambahan.
@@ -603,10 +603,10 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
   // Live-apply debounce; lewati bila invalid atau sudah sinkron.
   React.useEffect(() => {
     if (!dirtyRef.current || !canWrite || !validHex || inSync) {
-      if (inSync) setStatus("sinkron");
+      if (inSync) setStatus("in sync");
       return;
     }
-    setStatus("menulis…");
+    setStatus("writing…");
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => applyNow(fx, bright, hex, zone, speed, rearFx), 280);
     return () => window.clearTimeout(timer.current);
@@ -639,9 +639,9 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
       <Card className="col-span-12">
         <CardTitle icon={<Keyboard size={14} />}
           right={<Chip on={canWrite} color={canWrite ? "ok" : undefined}>
-            {`live · ${zoneName(zone)}`} · {follow ? "ikut wallpaper · " : ""}{fx !== "static" ? `${fx} · ` : ""}{status}
+            {`live · ${zoneName(zone)}`} · {follow ? "following wallpaper · " : ""}{fx !== "static" ? `${fx} · ` : ""}{status}
           </Chip>}>
-          Live map — klik untuk pilih zona{fx !== "static" ? " · beranimasi" : ""}
+          Live map — click to select zone{fx !== "static" ? " · animated" : ""}
         </CardTitle>
         <KeyboardVisual zones={shownZones} maxBright={snap?.kbd_max || 255}
           selected={zone} onSelect={(z) => { markDirty(); setZone(z); }} />
@@ -658,12 +658,12 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
           right={<Chip on={fx !== "static"} color={fx !== "static" ? "ok" : undefined}>
             {EFFECTS.find((e) => e.id === fx)?.label ?? fx}
           </Chip>}>
-          Effect — animasi semua zona
+          Effect — animate all zones
         </CardTitle>
         <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border-2 border-hair px-3 py-2.5">
           <div>
-            <div className="text-[13px] font-black uppercase">Ikuti wallpaper</div>
-            <div className="mt-0.5 text-[11.5px] text-faint">keyboard + rear = warna dominan wallpaper yang dicerahkan · warna manual bertahan sampai wallpaper ganti · efek animasi mematikan ini</div>
+            <div className="text-[13px] font-black uppercase">Follow wallpaper</div>
+            <div className="mt-0.5 text-[11.5px] text-faint">keyboard + rear = brightened dominant wallpaper color · manual color lasts until the wallpaper changes · animated effects turn this off</div>
           </div>
           <Switch on={follow} disabled={!canWrite} onClick={flipFollow} />
         </div>
@@ -696,13 +696,13 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
                 }} className="ck flex-1" />
               <span className="num w-14 text-right text-[20px] font-black text-cream">{speed.toFixed(2).replace(/0$/, "")}<span className="unit text-xs text-faint">x</span></span>
             </div>
-            <p className="num mt-2 text-[11px] text-faint">efek memakai warna + brightness di bawah untuk semua zona · pilih Static untuk kembali ke warna diam per-zona</p>
+            <p className="num mt-2 text-[11px] text-faint">effect uses the color + brightness below for all zones · pick Static to return to per-zone still colors</p>
           </>
         )}
         {rearIdx >= 0 && (
           <div className="mt-4 border-t border-hair pt-4">
             <div className="mb-2 flex items-center justify-between gap-2">
-              <span className="text-[12px] font-extrabold uppercase tracking-[0.12em] text-dim">Rear exhaust · 1 zona</span>
+              <span className="text-[12px] font-extrabold uppercase tracking-[0.12em] text-dim">Rear exhaust · 1 zone</span>
               {rearActive && <Chip on color="ok">rear {rearFx} · keyboard tetap</Chip>}
             </div>
             <div className="grid grid-cols-4 gap-2">
@@ -760,7 +760,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
               style={{ background: `rgb(${r},${g},${b})`, opacity: (bright / Math.max(max, 1)) * (0.35 + (0.65 * i) / 13) }} />
           ))}
         </div>
-        <div className="num mt-1.5 text-center text-[11px] text-faint">preview · {zoneName(zone) === "semua" ? "all zones" : zoneName(zone)}</div>
+        <div className="num mt-1.5 text-center text-[11px] text-faint">preview · {zoneName(zone) === "all" ? "all zones" : zoneName(zone)}</div>
       </Card>
       <Card className="col-span-12 xl:col-span-7">
         <CardTitle right={<span className="h-6 w-12 rounded-md border-2 border-black" style={{ background: hex }} />}>Color</CardTitle>
@@ -782,9 +782,9 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
             spellCheck={false} className="field !w-28 num" />
           <span className="num text-[12px] text-faint">rgb({r}, {g}, {b})</span>
         </div>
-        <p className="mt-3 font-mono text-[11px] text-faint">perubahan langsung ditulis ke LED - tanpa tombol apply.</p>
+        <p className="mt-3 font-mono text-[11px] text-faint">changes write straight to the LEDs — no apply button.</p>
         {snap && !snap.kbd_writable && snap.kbd_nodes > 0 && (
-          <p className="mt-1 font-mono text-[11px] text-accent">sysfs read-only - jalankan ./setup.sh lalu reboot.</p>
+          <p className="mt-1 font-mono text-[11px] text-accent">sysfs read-only — run ./setup.sh then reboot.</p>
         )}
       </Card>
     </div>
@@ -823,7 +823,7 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
           Save thresholds
         </CButton>
         {snap && !snap.bat_writable && (
-          <p className="mt-2 font-mono text-[11px] text-accent">sysfs read-only - jalankan ./setup.sh lalu reboot.</p>
+          <p className="mt-2 font-mono text-[11px] text-accent">sysfs read-only — run ./setup.sh then reboot.</p>
         )}
       </Card>
       <Card className="col-span-12">
@@ -844,7 +844,7 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
                   44<span className="unit text-[20px] text-faint">W / {snap?.profile.profile === "Balanced" ? "120" : "160"}W caps</span>
                 </div>
                 <div className="mt-3"><Bar pct={null} /></div>
-                <p className="num mt-2 text-[11.5px] text-faint">PL1/PL2 untuk {snap?.profile.profile ?? "-"} — live RAPL tak terbaca (butuh akses powercap)</p>
+                <p className="num mt-2 text-[11.5px] text-faint">PL1/PL2 for {snap?.profile.profile ?? "-"} — live RAPL unreadable (needs powercap access)</p>
               </>
             )}
           </div>
@@ -861,7 +861,7 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
               </div>
             ))}
             <p className="pt-1 text-[12px] font-medium leading-relaxed text-faint">
-              PL1/PL2 ditegakkan axiood per profil. EPP + governor milik power-profiles-daemon.
+              PL1/PL2 enforced by axiood per profile. EPP + governor belong to power-profiles-daemon.
             </p>
           </div>
         </div>
@@ -906,12 +906,12 @@ function SettingsPanel({ snap, theme, setTheme }: {
         <CardTitle>Startup</CardTitle>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-[14px] font-bold">Start saat login (tray)</div>
-            <div className="text-[12.5px] text-faint">App sembunyi ke tray · butuh tray host (mis. waybar) di Hyprland</div>
+            <div className="text-[14px] font-bold">Start at login (tray)</div>
+            <div className="text-[12.5px] text-faint">App hides to tray · needs a tray host (e.g. waybar) on Hyprland</div>
           </div>
           <Switch on={autoStart ?? false} disabled={!isTauri() || autoStart == null} onClick={flipAutoStart} />
         </div>
-        <p className="mt-2 text-[12px] text-faint">Tutup jendela (×/Alt+F4) = sembunyi ke tray · keluar via menu tray → Keluar.</p>
+        <p className="mt-2 text-[12px] text-faint">Closing the window (×/Alt+F4) = hide to tray · quit via tray menu → Quit.</p>
       </Card>
       <Card className="col-span-12 xl:col-span-6">
         <CardTitle>Theme</CardTitle>
@@ -922,7 +922,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
                 theme === t ? "border-black bg-accent/15" : "border-hair hover:border-dim")}
               style={theme === t ? { boxShadow: "4px 4px 0 #000" } : undefined}>
               <div className="text-[13.5px] font-black uppercase tracking-wide">{t}</div>
-              {t === "matugen" && <div className="mt-0.5 text-[10.5px] text-faint">ikut wallpaper · live</div>}
+              {t === "matugen" && <div className="mt-0.5 text-[10.5px] text-faint">following wallpaper · live</div>}
               <div className="mt-1.5 flex gap-1">
                 <span className="h-3.5 w-8 rounded-full bg-cream" />
                 <span className="h-3.5 w-8 rounded-full bg-accent" />

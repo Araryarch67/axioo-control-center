@@ -125,7 +125,7 @@ export const useStore = create<AppStore>()(
           } catch {
             fails++;
             if (fails === 2) {
-              get().notice("Backend tak terjangkau — jalankan via ./dev.sh.", true);
+              get().notice("Backend unreachable — run via ./dev.sh.", true);
             }
           }
         };

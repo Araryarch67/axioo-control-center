@@ -2,9 +2,17 @@
 
 ## AUR (axioo-control-center-git)
 
-PKGBUILD di `packaging/aur/PKGBUILD` — build `cargo --release --workspace` (axioo-ctl, axiood, axioo-control-center),
-install ke `/usr/bin`, D-Bus `com.axioo.Control.conf` ke `/etc/dbus-1/system.d`, polkit ke `/usr/share/polkit-1/actions`,
-systemd `axiood.service` ke `/usr/lib/systemd/system`, udev `99-axioo-kbd.rules` ke `/usr/lib/udev/rules.d`.
+PKGBUILD in `packaging/aur/PKGBUILD` — full package: Tauri GUI
+(`axioo-control-center`), `axioo-ctl`, `axiood`, desktop entry + icon,
+D-Bus `com.axioo.Control.conf` to `/etc/dbus-1/system.d`, polkit to
+`/usr/share/polkit-1/actions`, systemd `axiood.service` to
+`/usr/lib/systemd/system`, udev `99-axioo-kbd.rules` to
+`/usr/lib/udev/rules.d`. Build order: `npm ci && npm run build`
+(frontend first — the Tauri binary embeds `tauri-app/dist`) then
+`cargo build --release --workspace`. `.SRCINFO` is generated via
+`makepkg --printsrcinfo` (must be included in AUR uploads);
+`axioo-control-center-git.install` reloads daemon/udev and prints hints
+(axiood is deliberately not auto-enabled).
 
 ```sh
 cd packaging/aur && makepkg -si

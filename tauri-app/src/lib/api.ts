@@ -100,17 +100,17 @@ export type ThemeName = (typeof THEMES)[number];
 
 /** Katalog efek RGB (cermin `kbd_effect::KbdEffect`). */
 export const EFFECTS: Array<{ id: string; label: string; desc: string }> = [
-  { id: "static", label: "Static", desc: "warna diam" },
+  { id: "static", label: "Static", desc: "still color" },
   { id: "breathing", label: "Breathing", desc: "fade in/out" },
-  { id: "wave", label: "Wave", desc: "hue mengalir per zona" },
-  { id: "rainbow", label: "Rainbow", desc: "semua zona sinkron" },
-  { id: "cycle", label: "Cycle", desc: "6 preset bergantian" },
-  { id: "aurora", label: "Aurora", desc: "pastel lambat" },
-  { id: "twinkle", label: "Twinkle", desc: "kilau acak" },
-  { id: "pulse", label: "Pulse", desc: "detak jantung" },
-  { id: "gradient", label: "Gradient", desc: "pelangi tetap per zona" },
-  { id: "music", label: "Music", desc: "denyut beat (simulasi)" },
-  { id: "spectrum", label: "Spectrum", desc: "band per zona (simulasi)" },
+  { id: "wave", label: "Wave", desc: "hue flowing per zone" },
+  { id: "rainbow", label: "Rainbow", desc: "all zones in sync" },
+  { id: "cycle", label: "Cycle", desc: "6 presets cycling" },
+  { id: "aurora", label: "Aurora", desc: "slow pastel" },
+  { id: "twinkle", label: "Twinkle", desc: "random sparkle" },
+  { id: "pulse", label: "Pulse", desc: "heartbeat" },
+  { id: "gradient", label: "Gradient", desc: "fixed rainbow per zone" },
+  { id: "music", label: "Music", desc: "beat pulse (simulated)" },
+  { id: "spectrum", label: "Spectrum", desc: "band per zone (simulated)" },
   { id: "reactive", label: "Reactive", desc: "flash (placeholder)" },
 ];
 
@@ -121,12 +121,12 @@ export const EFFECTS: Array<{ id: string; label: string; desc: string }> = [
  * karena perilakunya memang beda di single LED.
  */
 export const REAR_EFFECTS: Array<{ id: string; label: string; desc: string }> = [
-  { id: "follow", label: "Follow", desc: "ikut efek keyboard" },
-  { id: "breathing", label: "Breathing", desc: "fade warna pilihan" },
-  { id: "rainbow", label: "Rainbow", desc: "hue berputar" },
-  { id: "cycle", label: "Cycle", desc: "6 preset bergantian" },
-  { id: "aurora", label: "Aurora", desc: "pastel lambat" },
-  { id: "twinkle", label: "Twinkle", desc: "kedip warna acak" },
-  { id: "pulse", label: "Pulse", desc: "detak jantung" },
-  { id: "music", label: "Music", desc: "denyut beat (simulasi)" },
+  { id: "follow", label: "Follow", desc: "follow keyboard effect" },
+  { id: "breathing", label: "Breathing", desc: "fade chosen color" },
+  { id: "rainbow", label: "Rainbow", desc: "rotating hue" },
+  { id: "cycle", label: "Cycle", desc: "6 presets cycling" },
+  { id: "aurora", label: "Aurora", desc: "slow pastel" },
+  { id: "twinkle", label: "Twinkle", desc: "random color blink" },
+  { id: "pulse", label: "Pulse", desc: "heartbeat" },
+  { id: "music", label: "Music", desc: "beat pulse (simulated)" },
 ];

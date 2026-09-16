@@ -42,12 +42,12 @@ fn args() -> (f64, Option<String>, bool, bool, bool) {
                     "axiood — Axioo privileged daemon\n\n\
                      Usage: axiood [--interval SECS] [--profile NAME] [--no-fan] [--no-rapl] [--no-ppd]\n\n\
                      NAME: Balanced|Entertainment|Performance (legacy Quiet = Balanced+quiet-fan).\n\
-                     Two-way sync dengan power-profiles-daemon.\n\
-                     Butuh root untuk tulis EC + RAPL."
+                     Two-way sync with power-profiles-daemon.\n\
+                     Requires root to write EC + RAPL."
                 );
                 std::process::exit(0);
             }
-            _ => eprintln!("axiood: arg tak dikenal '{a}' (lihat --help)"),
+            _ => eprintln!("axiood: unknown arg '{a}' (see --help)"),
         }
     }
     (interval, profile, no_fan, no_rapl, no_ppd)
@@ -76,7 +76,7 @@ fn apply_rapl(profile: AxiooProfile, no_rapl: bool) {
             profile.as_str(),
             paths.join(", ")
         ),
-        Err(e) => eprintln!("axiood: RAPL apply gagal ({e}) — lanjut dengan kipas saja"),
+        Err(e) => eprintln!("axiood: RAPL apply failed ({e}) — continuing with fan only"),
     }
 }
 
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let interval = Duration::from_secs_f64(interval_s.clamp(0.5, 30.0));
 
     if !fan_ctrl::is_root() {
-        eprintln!("axiood: butuh root (tulis EC + RAPL). Jalankan via systemd atau sudo.");
+        eprintln!("axiood: requires root (EC + RAPL writes). Run via systemd or sudo.");
         // Tetap jalan dalam mode baca-saja bila dipaksa? Tidak — keluar agar
         // systemd me-restart dengan konteks yang benar.
         std::process::exit(1);
@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ppd_current, _) = ppd::get_active_profile(&conn)
         .await
         .unwrap_or(("balanced".to_string(), flavor));
-    println!("axiood: PPD awal '{ppd_current}' (flavor {flavor:?})");
+    println!("axiood: initial PPD '{ppd_current}' (flavor {flavor:?})");
 
     let (initial, initial_quiet) = match profile_override.as_deref() {
         Some(p) if p.eq_ignore_ascii_case("quiet") || p.eq_ignore_ascii_case("power-saver") => {
@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(p) => match AxiooProfile::parse(p) {
             Some(prof) => (prof, false),
             None => {
-                eprintln!("axiood: --profile '{p}' tak dikenal, pakai hasil mapping PPD");
+                eprintln!("axiood: --profile '{p}' unknown, using PPD mapping result");
                 AxiooProfile::from_ppd(&ppd_current, AxiooProfile::Balanced, false)
             }
         },
@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         initial_quiet,
         ppd_current.clone(),
     )));
-    println!("axiood: profil awal {}", state.read().await.label());
+    println!("axiood: initial profile {}", state.read().await.label());
 
     // Serve com.axioo.Control
     let svc = AxiooControl {
@@ -136,8 +136,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let want = st.profile.ppd_profile();
             if want != ppd_current {
                 match ppd::set_active_profile(&conn, flavor, want).await {
-                    Ok(()) => println!("axiood: PPD diselaraskan -> '{want}'"),
-                    Err(e) => eprintln!("axiood: set PPD gagal ({e})"),
+                    Ok(()) => println!("axiood: PPD synced -> '{want}'"),
+                    Err(e) => eprintln!("axiood: failed to set PPD ({e})"),
                 }
             }
         }
@@ -169,10 +169,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if want != cur {
                             match ppd::set_active_profile(&conn, flavor, want).await {
                                 Ok(()) => {
-                                    println!("axiood: PPD -> '{want}' (dari {})", profile.as_str());
+                                    println!("axiood: PPD -> '{want}' (from {})", profile.as_str());
                                     state.write().await.ppd_profile = want.to_string();
                                 }
-                                Err(e) => eprintln!("axiood: set PPD gagal ({e})"),
+                                Err(e) => eprintln!("axiood: failed to set PPD ({e})"),
                             }
                         }
                     }
@@ -190,10 +190,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !ec_auto_applied {
                             match fan_ctrl::set_auto() {
                                 Ok(()) => {
-                                    println!("axiood: fan -> EC auto (firmware pegang)");
+                                    println!("axiood: fan -> EC auto (firmware in charge)");
                                     state.write().await.last_duty = 0;
                                 }
-                                Err(e) => eprintln!("axiood: set EC auto gagal ({e})"),
+                                Err(e) => eprintln!("axiood: set EC auto failed ({e})"),
                             }
                             ec_auto_applied = true;
                         }
@@ -221,11 +221,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             profile.as_str(), rep.verified_pct
                                         );
                                     }
-                                    Err(e) => eprintln!("axiood: tulis EC gagal ({e})"),
+                                    Err(e) => eprintln!("axiood: EC write failed ({e})"),
                                 }
                             }
                         } else {
-                            eprintln!("axiood: suhu tak terbaca (EC + coretemp gagal)");
+                            eprintln!("axiood: temp unreadable (EC + coretemp failed)");
                         }
                     }
                 }
@@ -261,7 +261,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    Err(e) => eprintln!("axiood: baca PPD gagal ({e})"),
+                    Err(e) => eprintln!("axiood: PPD read failed ({e})"),
                 }
             }
         }

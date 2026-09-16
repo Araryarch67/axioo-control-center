@@ -1,0 +1,38 @@
+# AUR install scriptlet: reload daemon/udev + activation hints.
+# (axiood is deliberately NOT auto-enabled — that's the user's call.)
+
+_reload() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger --subsystem-match=leds --action=change 2>/dev/null || true
+    udevadm trigger --subsystem-match=power_supply --action=change 2>/dev/null || true
+  fi
+}
+
+_hint() {
+  cat <<'EOF'
+axioo-control-center installed:
+  sudo systemctl enable --now axiood   # daemon (EC fan + RAPL + profiles)
+  axioo-control-center                 # GUI (or via launcher)
+  axioo-ctl probe                      # check hardware capabilities
+Needs keyboard/EC drivers: yay -S clevo-drivers-dkms-git,
+then follow the quirk section in docs/kbd-backlight.md. A reboot is
+recommended so the passwordless keyboard udev rule takes full effect.
+EOF
+}
+
+post_install() {
+  _reload
+  _hint
+}
+
+post_upgrade() {
+  _reload
+}
+
+post_remove() {
+  _reload
+}

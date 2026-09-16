@@ -173,7 +173,7 @@ pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>, rear: Opt
         Some(e) => e,
         None => {
             eprintln!(
-                "error: unknown effect '{name}' (pilih: {})",
+                "error: unknown effect '{name}' (choose: {})",
                 KbdEffect::all()
                     .iter()
                     .map(|e| e.as_str())

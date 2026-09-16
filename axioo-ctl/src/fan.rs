@@ -69,15 +69,15 @@ pub fn dump() {
         map[0xD4], map[0xD5], map[0xD6], map[0xD7]
     );
 
-    println!("\n== cross-check vs hwmon (validasi read-only) ==");
+    println!("\n== cross-check vs hwmon (read-only validation) ==");
     let c = cpu::sample();
     match c.package_temp_c {
         Some(pkg) => {
             let diff = (pkg - snap.cpu_temp_raw as f64).abs();
             let verdict = if diff <= 5.0 {
-                "COCOK"
+                "MATCH"
             } else {
-                "BEDA — peta belum valid"
+                "MISMATCH — map not validated"
             };
             println!(
                 "  EC 0x07 = {}C  vs coretemp package = {pkg:.1}C  [{verdict}]",
@@ -88,7 +88,7 @@ pub fn dump() {
     }
     let fans = hwmon::fans();
     if fans.is_empty() {
-        println!("  (no hwmon fan nodes; bandingkan manual saat kipas terdengar)");
+        println!("  (no hwmon fan nodes; compare manually when the fan is audible)");
     }
     for f in &fans {
         let ec_rpms = [snap.fan1_rpm as i64, snap.fan2_rpm as i64];
@@ -98,9 +98,9 @@ pub fn dump() {
             .min()
             .unwrap_or(i64::MAX);
         let verdict = if closest <= 300 {
-            "COCOK"
+            "MATCH"
         } else {
-            "BEDA — peta belum valid"
+            "MISMATCH — map not validated"
         };
         println!(
             "  hwmon {} = {} RPM  vs EC {} / {} RPM  [{verdict}]",
@@ -108,12 +108,12 @@ pub fn dump() {
         );
     }
 
-    println!("\n== langkah berikut ==");
-    println!("  Ulangi saat idle vs load: kalau 0x07 ikut coretemp dan");
-    println!("  0xD0–0xD3 ikut hwmon RPM, peta valid untuk model ini.");
-    println!("  Kalau tidak cocok, bandingkan byte 0xD4/0xD5 yang berubah");
-    println!("  saat kipas berputar (lihat docs/ec-fan-protocol.md bagian F).");
-    println!("  Preview kurva tanpa menulis: axioo-ctl fan curve --temp <C> --duty <pct>");
+    println!("\n== next steps ==");
+    println!("  Repeat at idle vs load: if 0x07 tracks coretemp and");
+    println!("  0xD0–0xD3 track hwmon RPM, the map is valid for this model.");
+    println!("  If they don't match, compare the 0xD4/0xD5 bytes that change");
+    println!("  while the fan spins (see docs/ec-fan-protocol.md section F).");
+    println!("  Preview curve without writing: axioo-ctl fan curve --temp <C> --duty <pct>");
 }
 
 /// `axioo-ctl fan watch`: poll the EC map over time (read-only).
@@ -182,10 +182,10 @@ pub fn curve(temp_c: i32, duty: u8) {
     println!("  input:  temp={temp_c}C duty={duty}%");
     println!("  output: duty={next}% (raw {raw:#04X})");
     if next == duty {
-        println!("  (di dalam hysteresis band — duty ditahan)");
+        println!("  (inside hysteresis band — duty held)");
     }
     println!(
-        "  clamp aman: {}–{}% (di bawah ~40% kipas stall)",
+        "  safe clamp: {}–{}% (fans stall below ~40%)",
         fan::MIN_FAN_DUTY_PCT,
         fan::MAX_FAN_DUTY_PCT
     );
@@ -196,21 +196,21 @@ pub fn curve(temp_c: i32, duty: u8) {
 pub fn set(pct: u8) {
     if !fan_ctrl::is_root() {
         println!("error: fan set needs root.");
-        println!("  pakai: pkexec axioo-ctl fan set {pct}   (atau sudo)");
+        println!("  run: pkexec axioo-ctl fan set {pct}   (or sudo)");
         std::process::exit(1);
     }
     let want = pct.clamp(fan::MIN_FAN_DUTY_PCT, fan::MAX_FAN_DUTY_PCT);
     if want != pct {
-        println!("  (duty {pct}% di-clamp ke {want}% — batas aman 40–100%)");
+        println!("  (duty {pct}% clamped to {want}% — safe range 40–100%)");
     }
     match fan_ctrl::set_manual_duty(want) {
         Ok(rep) => {
-            println!("axioo-ctl fan set: manual {want}% kedua kipas (cmd 0x99 → 0x01+0x02)");
+            println!("axioo-ctl fan set: manual {want}% both fans (cmd 0x99 → 0x01+0x02)");
             match rep.verified_pct {
-                Some(got) => println!("  verify OK: cermin 0xCE = {got}%"),
-                None => println!("  verify dilewati: ec_sys tak terbaca (tulis tetap jalan)"),
+                Some(got) => println!("  verify OK: 0xCE mirror = {got}%"),
+                None => println!("  verify skipped: ec_sys unreadable (write still applied)"),
             }
-            println!("  kembalikan kontrol EC: axioo-ctl fan auto");
+            println!("  restore EC control: axioo-ctl fan auto");
         }
         Err(e) => {
             println!("error: {e}");
@@ -223,11 +223,11 @@ pub fn set(pct: u8) {
 pub fn auto() {
     if !fan_ctrl::is_root() {
         println!("error: fan auto needs root.");
-        println!("  pakai: pkexec axioo-ctl fan auto   (atau sudo)");
+        println!("  run: pkexec axioo-ctl fan auto   (or sudo)");
         std::process::exit(1);
     }
     match fan_ctrl::set_auto() {
-        Ok(()) => println!("axioo-ctl fan auto: kontrol dikembalikan ke EC (0x99, port 0xFF)"),
+        Ok(()) => println!("axioo-ctl fan auto: control returned to EC (0x99, port 0xFF)"),
         Err(e) => {
             println!("error: {e}");
             std::process::exit(1);
@@ -241,7 +241,7 @@ pub fn auto() {
 pub fn ping() {
     if !fan_ctrl::is_root() {
         println!("error: fan ping needs root.");
-        println!("  pakai: pkexec axioo-ctl fan ping   (atau sudo)");
+        println!("  run: pkexec axioo-ctl fan ping   (or sudo)");
         std::process::exit(1);
     }
     println!("ok");

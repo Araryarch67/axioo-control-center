@@ -46,7 +46,7 @@ pub fn status() {
                     .join(" ")
             );
         } else {
-            println!("  available: (firmware tidak expose list — coba set 60-100 langsung)");
+            println!("  available: (firmware does not expose list — try setting 60-100 directly)");
         }
     }
 }
@@ -70,7 +70,7 @@ pub fn get() {
 
 pub fn set(start: Option<u64>, end: Option<u64>) {
     if start.is_none() && end.is_none() {
-        eprintln!("usage: axioo-ctl battery set --start 80 --end 90  (atau salah satu)");
+        eprintln!("usage: axioo-ctl battery set --start 80 --end 90  (or either one)");
         std::process::exit(2);
     }
     let bats = battery::batteries();
@@ -84,7 +84,7 @@ pub fn set(start: Option<u64>, end: Option<u64>) {
         Ok(()) => {
             let s = start.map_or("-".to_string(), |v| v.to_string());
             let e = end.map_or("-".to_string(), |v| v.to_string());
-            println!("{name}: charge thresholds set start={s} end={e} (butuh root)");
+            println!("{name}: charge thresholds set start={s} end={e} (requires root)");
         }
         Err(e) => {
             eprintln!("error: {e}");
