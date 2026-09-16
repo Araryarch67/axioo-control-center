@@ -61,6 +61,11 @@ spin_wait() { # $1 step, $2 label, $3 pid → spinner sampai pid selesai (gagal 
     wait "$pid" || true
     bar "$step" "$label ✓"; echo
 }
+# Perintah ber-output: verbose → stdout lolos (stderr dibuang),
+# quiet → semuanya ke log.
+qout() {
+    if [ "$QUIET" = 1 ]; then "$@" >>"$LOGFILE" 2>&1; else "$@" 2>/dev/null; fi
+}
 : >"$LOGFILE"
 # say(): verbose → stdout, quiet → log saja.
 say()  { if [ "$QUIET" = 1 ]; then printf '%s\n' "$*" >>"$LOGFILE"; else printf '%s\n' "$*"; fi; }
@@ -126,7 +131,7 @@ if have systemctl; then
     if systemctl is-active --quiet axiood 2>/dev/null \
         || systemctl is-enabled --quiet axiood 2>/dev/null \
         || systemctl list-unit-files axiood.service 2>/dev/null | grep -q '^axiood\.service'; then
-        $SUDO systemctl disable --now axiood 2>/dev/null || true
+        qout $SUDO systemctl disable --now axiood || true
         say "  - service axiood di-stop + disable"
     else
         say "  - service axiood: tidak terdaftar, lewati"
@@ -215,6 +220,7 @@ rm_one "output vite" "$HERE"/tauri-app/dist
 [ "$QUIET" = 1 ] && { bar 4 "build cache ✓"; echo; }
 
 # ---------- E. driver DKMS custom ----------
+_e_shown=0
 if [ "${KEEP_DRIVER:-0}" = "1" ]; then
     say "[E] driver DKMS: DIPERTAHANKAN (KEEP_DRIVER=1)"
 else
@@ -224,7 +230,7 @@ else
             # baris "tuxedo-drivers-axioo/4.20.1, ..." → "tuxedo-drivers-axioo/4.20.1"
             mod="$(printf '%s' "$line" | awk -F',' '{print $1}' | tr -d ' ')"
             if [ -n "$mod" ]; then
-                $SUDO dkms remove "$mod" --all 2>/dev/null || true
+                qout $SUDO dkms remove "$mod" --all || true
                 say "  - dkms remove: $mod"
             fi
         done < <(dkms status 2>/dev/null | grep '^tuxedo-drivers-axioo/' || true)
@@ -244,8 +250,9 @@ else
             # TANPA --all: dkms-3.x menolak `install module/ver --all`
             # ("The action install does not support the --all parameter").
             if [ "$QUIET" = 1 ]; then
-                $SUDO dkms install "$mod/$ver" >>"$LOGFILE" 2>&1 & _dkpid=$!
+                $SUDO dkms install "$mod/$ver" </dev/null >>"$LOGFILE" 2>&1 & _dkpid=$!
                 spin_wait 5 "driver ($mod)" "$_dkpid"
+                _e_shown=1
             else
                 $SUDO dkms install "$mod/$ver" 2>&1 | tail -n 3 || true
             fi
@@ -263,7 +270,8 @@ else
         say "    install ulang (./setup.sh) atau reboot + reinstall driver. Bila ragu, reboot."
     fi
 fi
-[ "$QUIET" = 1 ] && { bar 5 "driver ✓"; echo; }
+# Lewati bar 5 ganda bila spin_wait restore driver sudah menampilkannya.
+[ "$QUIET" = 1 ] && [ "${_e_shown:-0}" = 0 ] && { bar 5 "driver ✓"; echo; }
 
 # ---------- verifikasi ----------
 say

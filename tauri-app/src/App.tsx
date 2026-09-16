@@ -33,6 +33,17 @@ const TITLES: Record<Tab, { title: string; sub: string }> = {
 
 const PRESETS = ["#f5efe0", "#ff5f56", "#86be78", "#7aa2f7", "#f5a524", "#7dd3e0", "#cba6f7", "#ff79c6"];
 
+/** Node terakhir (indeks 4 dari 5+) = lightbar exhaust belakang (EC 0x07), bukan zona keyboard. */
+function kbdLabel(nodes: number): string {
+  if (nodes >= 5) return `${nodes - 1} zones + 1 rear`;
+  return `${nodes} zones`;
+}
+
+function kbdShort(nodes: number): string {
+  if (nodes >= 5) return `${nodes - 1}+1 rear`;
+  return `${nodes} LEDs`;
+}
+
 function Titlebar({ tab }: { tab: Tab }) {
   const win = React.useMemo(() => (isTauri() ? getCurrentWindow() : null), []);
   const btn = "flex h-8 w-11 items-center justify-center text-faint transition-colors hover:bg-card2 hover:text-ink";
@@ -231,7 +242,7 @@ function Dashboard({ snap, shownDuty, ecAuto, liveTemp, busy, run }: {
           <SpecRow label="Product" value={snap?.product ?? "-"} />
           <SpecRow label="CPU" value={shortCpu} sub={snap?.cpu_freq_line ?? ""} />
           <SpecRow label="GPU" value={snap?.gpus[0]?.name ?? "N/A"} sub={snap?.gpus[0] ? `${fmt1(snap.gpus[0].temp_c, "°C")} · ${fmt1(snap.gpus[0].power_w, "W")}` : "power.limit N/A"} />
-          <SpecRow label="Keyboard" value={snap ? `${snap.kbd_nodes} zones` : "-"} sub={snap?.kbd_writable ? "writable" : "read-only"} />
+          <SpecRow label="Keyboard" value={snap ? kbdLabel(snap.kbd_nodes) : "-"} sub={snap?.kbd_writable ? "writable" : "read-only"} />
         </div>
       </Card>
       <Card className="col-span-12 xl:col-span-5">
@@ -649,7 +660,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
         )}
       </Card>
       <Card className="col-span-12 xl:col-span-5">
-        <CardTitle icon={<Keyboard size={14} />} right={<Chip on={(snap?.kbd_nodes ?? 0) > 0}>{snap?.kbd_nodes ?? 0} LEDs</Chip>}>Zones</CardTitle>
+        <CardTitle icon={<Keyboard size={14} />} right={<Chip on={(snap?.kbd_nodes ?? 0) > 0}>{kbdShort(snap?.kbd_nodes ?? 0)}</Chip>}>Zones</CardTitle>
         <div className="flex flex-wrap gap-2">
           {[{ label: "All", z: null }, ...Array.from({ length: snap?.kbd_nodes ?? 0 }, (_, i) => ({ label: zoneName(i), z: i as number | null }))].map((o) => (
             <button key={o.label} onClick={() => { markDirty(); setZone(o.z); }}
@@ -862,7 +873,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
           {[
             ["axiood daemon", snap?.profile.daemon ? `running · ${snap.profile.profile}` : "offline", !!snap?.profile.daemon],
             ["Fan mode", snap?.profile.daemon ? snap.profile.fan_mode : "-", !!snap?.profile.daemon],
-            ["Keyboard sysfs", snap?.kbd_writable ? `writable · ${snap?.kbd_nodes} zones` : "read-only", snap?.kbd_writable ?? false],
+            ["Keyboard sysfs", snap?.kbd_writable ? `writable · ${kbdLabel(snap?.kbd_nodes ?? 0)}` : "read-only", snap?.kbd_writable ?? false],
             ["Battery sysfs", snap?.bat_writable ? "writable" : "read-only", snap?.bat_writable ?? false],
             ["App privileges", snap?.is_root ? "root (direct EC)" : "user (via daemon)", true],
           ].map(([k, v, ok]) => (
