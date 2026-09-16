@@ -130,6 +130,10 @@ struct Snapshot {
     kbd_rear_effect: String,
     /// Pengali kecepatan efek (1.0 = normal).
     kbd_effect_speed: f32,
+    /// Revisi palet matugen (mtime `colors.json`, 0 bila tak ada).
+    /// Frontend theme "matugen" refresh hanya bila ini berubah —
+    /// tanpa timer/IPC tambahan di luar poll snapshot yang sudah ada.
+    matugen_rev: u64,
     profile: ProfileState,
     stamp: u64,
 }
@@ -433,6 +437,7 @@ fn build_snapshot(
         kbd_effect,
         kbd_rear_effect,
         kbd_effect_speed,
+        matugen_rev: matugen_rev(),
         profile,
         stamp: st.n,
     }
@@ -757,6 +762,41 @@ async fn kbd_effect_start(
     })
 }
 
+/// Revisi palet matugen = mtime `~/.cache/ryoku/colors.json` (detik).
+/// Satu `stat` syscall per snapshot — jauh lebih murah dari baca+parse JSON.
+fn matugen_rev() -> u64 {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return 0;
+    }
+    std::fs::metadata(std::path::Path::new(&home).join(".cache/ryoku/colors.json"))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Palet matugen Ryoku (`~/.cache/ryoku/colors.json`) untuk theme GUI.
+/// Murni read-only; Err bila file tak ada agar frontend fallback ke theme statis.
+#[tauri::command]
+fn get_matugen() -> Result<std::collections::HashMap<String, String>, String> {
+    let home = std::env::var("HOME").map_err(|e| format!("HOME tak terbaca: {e}"))?;
+    let path = std::path::Path::new(&home).join(".cache/ryoku/colors.json");
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("matugen tak terbaca: {e}"))?;
+    let map: std::collections::HashMap<String, serde_json::Value> =
+        serde_json::from_str(&raw).map_err(|e| format!("matugen json rusak: {e}"))?;
+    Ok(map
+        .into_iter()
+        .filter_map(|(k, v)| {
+            v.as_str().filter(|s| s.starts_with('#')).map(|s| {
+                // kunci + hex dipotong 7 char ("#rrggbb") — against junk.
+                (k, s.chars().take(7).collect::<String>())
+            })
+        })
+        .collect())
+}
+
 /// Hentikan animasi RGB (kembalikan warna diam terakhir).
 #[tauri::command]
 async fn kbd_effect_stop(
@@ -915,7 +955,42 @@ fn main() {
             kbd_effect_start,
             kbd_effect_stop,
             battery_set,
+            get_matugen,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run axioo-center");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matugen_rev_mirrors_colors_json() {
+        // Di mesin Ryoku file-nya ada → rev != 0; di mesin lain → 0 (fallback).
+        let rev = matugen_rev();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let exists = std::path::Path::new(&home)
+            .join(".cache/ryoku/colors.json")
+            .exists();
+        assert_eq!(rev != 0, exists, "rev harus != 0 iff colors.json ada");
+    }
+
+    #[test]
+    fn matugen_palette_parses() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let path = std::path::Path::new(&home).join(".cache/ryoku/colors.json");
+        if !path.exists() {
+            return; // bukan mesin Ryoku — command akan Err, itu perilaku benar
+        }
+        let pal = get_matugen().expect("colors.json ada tapi get_matugen gagal");
+        assert!(pal.contains_key("primary"), "palet Ryoku wajib punya primary");
+        assert!(pal.contains_key("background"));
+        for (k, v) in &pal {
+            assert!(
+                v.len() == 7 && v.starts_with('#'),
+                "nilai {k} harus #rrggbb, dapat {v}"
+            );
+        }
+    }
 }

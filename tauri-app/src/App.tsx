@@ -7,6 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EFFECTS, REAR_EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
 import { useStore, applyTheme, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
+import { refreshMatugen } from "@/lib/matugen";
 import { cn, curveDuty, fmt1, hexToRgb } from "@/lib/utils";
 import { Bar, Card, CardTitle, CButton, Chip, Seg, Switch, Toast } from "@/components/ui";
 import { Stat, SpecRow } from "@/components/Gauge";
@@ -105,6 +106,17 @@ export default function App() {
   React.useEffect(() => {
     applyTheme(theme);
   }, [theme]);
+
+  // Theme "matugen": refresh HANYA bila revisi palet berubah (dibawa poll
+  // snapshot yang sudah ada — tanpa timer/IPC tambahan, tanpa lag).
+  const matugenRev = React.useRef<number>(0);
+  React.useEffect(() => {
+    if (theme !== "matugen" || !snap || snap.matugen_rev === 0) return;
+    if (snap.matugen_rev !== matugenRev.current) {
+      matugenRev.current = snap.matugen_rev;
+      void refreshMatugen();
+    }
+  }, [theme, snap?.stamp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
     if (!snap) return;
@@ -858,6 +870,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
                 theme === t ? "border-black bg-accent/15" : "border-hair hover:border-dim")}
               style={theme === t ? { boxShadow: "4px 4px 0 #000" } : undefined}>
               <div className="text-[13.5px] font-black uppercase tracking-wide">{t}</div>
+              {t === "matugen" && <div className="mt-0.5 text-[10.5px] text-faint">ikut wallpaper · live</div>}
               <div className="mt-1.5 flex gap-1">
                 <span className="h-3.5 w-8 rounded-full bg-cream" />
                 <span className="h-3.5 w-8 rounded-full bg-accent" />

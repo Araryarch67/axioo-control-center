@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { api, type Snapshot, type ThemeName } from "./api";
+import { clearMatugen, refreshMatugen } from "./matugen";
 import { rgbToHex } from "./utils";
 
 export type Tab = "dashboard" | "performance" | "fan" | "keyboard" | "power" | "settings";
@@ -74,7 +75,7 @@ function legacyTab(): Tab | null {
 function legacyTheme(): ThemeName | null {
   try {
     const v = localStorage.getItem(LEGACY_THEME);
-    return (["ryoku", "gruvbox", "dracula", "nord", "tokyo", "catppuccin"] as const).includes(v as ThemeName)
+    return (["matugen", "ryoku", "gruvbox", "dracula", "nord", "tokyo", "catppuccin"] as const).includes(v as ThemeName)
       ? (v as ThemeName) : null;
   } catch { return null; }
 }
@@ -82,6 +83,12 @@ function legacyTheme(): ThemeName | null {
 /** Terapkan tema ke <html data-theme> + bersihkan key lama bila sudah termigrasi. */
 export function applyTheme(theme: ThemeName) {
   document.documentElement.dataset.theme = theme;
+  if (theme === "matugen") {
+    // Palet live dari ~/.cache/ryoku/colors.json (async, tak diblokir).
+    void refreshMatugen();
+  } else {
+    clearMatugen();
+  }
   try {
     localStorage.removeItem(LEGACY_THEME);
     localStorage.removeItem(LEGACY_TAB);

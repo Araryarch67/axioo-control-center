@@ -70,6 +70,17 @@
   --lime: 166 227 161;
   --ok: 150 215 150; --bad: 242 128 152;
 }
+/* Fallback sebelum palet live dari ~/.cache/ryoku/colors.json kepasang
+   (inline var via lib/matugen.ts menimpa blok ini bila JSON ada). */
+[data-theme="matugen"] {
+  --bg: 19 19 19; --bg2: 27 27 27; --card: 31 31 31; --card2: 42 42 42;
+  --line: 0 0 0; --border: 90 90 90; --hair: 60 60 60;
+  --ink: 226 226 226; --cream: 240 240 240;
+  --dim: 200 200 200; --faint: 145 145 145; --ghost: 70 70 70;
+  --accent: 200 200 200; --accent-ink: 30 30 30;
+  --lime: 198 198 198;
+  --ok: 180 180 180; --bad: 199 199 199;
+}
 
 html, body, #root { height: 100%; }
 body {

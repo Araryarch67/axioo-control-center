@@ -56,6 +56,8 @@ export interface Snapshot {
   kbd_rear_effect: string;
   /** Pengali kecepatan efek (1.0 = normal). */
   kbd_effect_speed: number;
+  /** mtime colors.json matugen (0 bila tak ada) — pemicu refresh theme. */
+  matugen_rev: number;
   profile: ProfileState;
   stamp: number;
 }
@@ -81,9 +83,12 @@ export const api = {
   kbdEffectStop: () => invoke<string>("kbd_effect_stop"),
   batterySet: (start: number | null, end: number | null) =>
     invoke<string>("battery_set", { start, end }),
+  /** Palet matugen Ryoku (Err bila ~/.cache/ryoku/colors.json tak ada). */
+  matugen: () => invoke<Record<string, string>>("get_matugen"),
 };
 
 export const THEMES = [
+  "matugen",
   "ryoku",
   "gruvbox",
   "dracula",
