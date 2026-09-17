@@ -952,7 +952,10 @@ fn autostart_desktop_content() -> String {
     ["[Desktop Entry]", "Type=Application", "Name=Axioo Control Center"]
         .join("\n")
         + "\nComment=Hardware control for Axioo (Clevo) laptops (start minimized to tray)\n"
-        + &format!("Exec={home}/.local/bin/axioo-center-autostart\n")
+        // --minimized = sembunyi ke tray (klik launcher pakai wrapper TANPA
+        // flag agar jendela tampil; instance kedua mati via single-instance).
+        // APPIMAGELAUNCHER_DISABLE agar tak ada dialog integrate saat login.
+        + &format!("Exec=env APPIMAGELAUNCHER_DISABLE=1 {home}/.local/bin/axioo-center-autostart --minimized\n")
         + "Icon=axioo-center\nCategories=System;Settings;HardwareSettings;\n\
               Terminal=false\nX-GNOME-Autostart-enabled=true\nStartupWMClass=axioo-center\n"
 }
@@ -1198,6 +1201,10 @@ mod tests {
         assert!(
             AUTOSTART_UNIT.contains("ExecStart=%h/.local/bin/axioo-center-autostart"),
             "Exec harus stabil tanpa spasi (wrapper %h)"
+        );
+        assert!(
+            AUTOSTART_UNIT.contains("--minimized"),
+            "unit boot harus --minimized (sembunyi ke tray)"
         );
         let desk = autostart_desktop_content();
         assert!(

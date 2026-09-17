@@ -242,9 +242,12 @@ chmod +x "$HOME/.local/bin/axioo-center-autostart"
 # Man page axioo-ctl (butuh man-db; sudah di system deps di atas).
 sudo install -Dm644 "$HERE/packaging/man/axioo-ctl.1" /usr/share/man/man1/axioo-ctl.1
 cp "$HERE/packaging/appimage/$APPID.desktop" "$HOME/.local/share/applications/"
-# APPIMAGELAUNCHER_DISABLE=1 agar AppImageLauncher tak memunculkan dialog
-# "integrate?" saat app dijalankan dari luar ~/Applications.
-sed -i "s|^Exec=.*|Exec=env APPIMAGELAUNCHER_DISABLE=1 \"$APPIMG\"|" \
+# Exec = WRAPPER stabil TANPA --minimized (jendela tampil; instance kedua
+# mati sendiri via single-instance + memunculkan jendela pertama).
+# JANGAN hardcode path AppImage: AppImageLauncher memindah/rename file tiap
+# integrate/update sehingga Exec basi → klik launcher tidak terjadi apa-apa.
+# APPIMAGELAUNCHER_DISABLE=1 agar tak ada dialog "integrate?" dari launcher.
+sed -i "s|^Exec=.*|Exec=env APPIMAGELAUNCHER_DISABLE=1 $HOME/.local/bin/axioo-center-autostart|" \
     "$HOME/.local/share/applications/$APPID.desktop"
 # StartupWMClass HARUS = stem nama file AppImage: app_id Wayland / WM_CLASS
 # X11 diturunkan toolkit dari nama executable (terbukti via weston +
@@ -260,9 +263,8 @@ cp "$HERE/dist/icon.png" "$HOME/.local/share/icons/hicolor/256x256/apps/$APPID.p
 # (tauri icon → tauri-app/src-tauri/icons/* untuk bundle AppImage;
 #  resize 256 via PIL untuk hicolor launcher). Regenerasi bila logo ganti.
 # Autostart login: .desktop mandiri (bukan via toggle in-app) agar langsung
-# aktif habis setup. Exec = WRAPPER stabil (bukan path AppImage yang
-# berversi + bisa dipindah AppImageLauncher); wrapper menambahkan
-# --minimized sendiri (mulai di tray).
+# aktif habis setup. Exec = WRAPPER stabil + --minimized (mulai di tray);
+# klik launcher pakai wrapper TANPA flag (jendela tampil, Steam-like).
 # Toggle di Settings / menu tray menulis SATU file yang sama (lihat
 # autostart_get/set di tauri-app/src-tauri/src/main.rs).
 mkdir -p "$HOME/.config/autostart"
@@ -272,7 +274,7 @@ cat > "$AUTOSTART" <<EOF
 Type=Application
 Name=Axioo Control Center
 Comment=Hardware control for Axioo (Clevo) laptops (start minimized to tray)
-Exec=$HOME/.local/bin/axioo-center-autostart
+Exec=env APPIMAGELAUNCHER_DISABLE=1 $HOME/.local/bin/axioo-center-autostart --minimized
 Icon=$APPID
 Categories=System;Settings;HardwareSettings;
 Terminal=false

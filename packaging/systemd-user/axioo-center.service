@@ -12,7 +12,8 @@ After=graphical-session.target
 [Service]
 Type=simple
 # %h = $HOME (tanpa spasi) → tahan AppImageLauncher pindah/rename AppImage.
-ExecStart=%h/.local/bin/axioo-center-autostart
+# --minimized = mulai sembunyi di tray (klik launcher = wrapper tanpa flag).
+ExecStart=%h/.local/bin/axioo-center-autostart --minimized
 Restart=on-failure
 RestartSec=5
 
