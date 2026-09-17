@@ -1,5 +1,7 @@
 <div align="center">
 
+<img width="192" height="192" alt="android-chrome-192x192" src="https://github.com/user-attachments/assets/2e1b1faa-9cef-4554-8065-ac1bd9bbfdd1" />
+
 # Axioo Control Center
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
