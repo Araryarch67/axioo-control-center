@@ -45,6 +45,7 @@ trait AxiooControl {
     async fn set_fan_ec_auto(&self, auto: bool) -> zbus::Result<String>;
     async fn set_fan_manual(&self, duty: u8) -> zbus::Result<String>;
     async fn clear_fan_override(&self) -> zbus::Result<String>;
+    #[allow(clippy::too_many_arguments)]
     async fn set_kbd(
         &self,
         brightness: u32,
@@ -548,6 +549,30 @@ async fn daemon_proxy() -> Result<AxiooControlProxy<'static>, String> {
         .map_err(|_| "axiood not running — run './install-system.sh' from tauri-app/ then restart the app".to_string())
 }
 
+/// Simpan warna terakhir ke daemon (best-effort, untuk restore sebelum
+/// SDDM saat boot — GUI user tak bisa tulis `/var/lib` langsung).
+/// Gagal (daemon mati) bukan error: restore sesi-login via localStorage
+/// tetap jalan.
+async fn persist_kbd_via_daemon(
+    brightness: u32,
+    r: u8,
+    g: u8,
+    b: u8,
+    effect: &str,
+    rear: &str,
+    speed: f32,
+) {
+    let Ok(conn) = zbus::Connection::system().await else {
+        return;
+    };
+    let Ok(proxy) = AxiooControlProxy::new(&conn).await else {
+        return;
+    };
+    let _ = proxy
+        .set_kbd(brightness, r, g, b, effect, rear, speed)
+        .await;
+}
+
 /// Serahkan kipas ke firmware EC auto (via daemon; RAPL/PPD tetap ikut profil).
 #[tauri::command]
 async fn set_fan_ec_auto(auto: bool) -> Result<String, String> {
@@ -590,11 +615,17 @@ struct KbdSetArgs {
 
 /// Keyboard backlight via sysfs LED (safe, udev-rule writable).
 /// Mematikan efek animasi yang sedang jalan (biar tak rebutan tulis sysfs).
+/// Sukses langsung juga disimpan ke daemon (best-effort) agar warna
+/// terakhir ke-restore sebelum SDDM saat boot berikutnya.
 #[tauri::command]
 async fn kbd_set(
     args: KbdSetArgs,
     effects: tauri::State<'_, Mutex<EffectState>>,
 ) -> Result<String, String> {
+    let speed = effects
+        .lock()
+        .map(|fx| fx.speed)
+        .unwrap_or(1.0);
     if let Ok(mut fx) = effects.lock() {
         fx.stop_all();
     }
@@ -614,15 +645,33 @@ async fn kbd_set(
     for i in targets {
         let kb = &kbds[i];
         let br = args.brightness.min(kb.max_brightness);
-        kbd::set(kb, br, (args.r, args.g, args.b)).map_err(|e| {
+        if let Err(e) = kbd::set(kb, br, (args.r, args.g, args.b)) {
             let msg = format!("{e}");
             if msg.contains("permission denied") {
-                format!("kbd zone {i}: permission denied — run './install-system.sh' (udev rule) then restart the app")
+                // Fallback: daemon (root) yang tulis + simpan sekaligus.
+                match daemon_proxy().await {
+                    Ok(proxy) => {
+                        proxy
+                            .set_kbd(args.brightness, args.r, args.g, args.b, "static", "follow", speed)
+                            .await
+                            .map_err(|de| format!("kbd zone {i}: permission denied ({e}); daemon also failed: {de}"))?;
+                        return Ok(format!(
+                            "Keyboard → brightness {} rgb({},{},{}) (via axiood)",
+                            args.brightness, args.r, args.g, args.b
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "kbd zone {i}: permission denied — run './install-system.sh' (udev rule) then restart the app"
+                        ));
+                    }
+                }
             } else {
-                format!("kbd zone {i} failed: {e}")
+                return Err(format!("kbd zone {i} failed: {e}"));
             }
-        })?;
+        }
     }
+    persist_kbd_via_daemon(args.brightness, args.r, args.g, args.b, "static", "follow", speed).await;
     Ok(format!(
         "Keyboard → brightness {} rgb({},{},{})",
         args.brightness, args.r, args.g, args.b
@@ -742,33 +791,45 @@ async fn kbd_effect_start(
     if kbd::discover().is_empty() {
         return Err("Keyboard backlight not found.".to_string());
     }
-    let mut fx = effects
-        .lock()
-        .map_err(|e| format!("effect lock: {e}"))?;
-    fx.stop_all();
-    if effect == kbd_effect::KbdEffect::Static && rear_fx.is_none() {
-        return Ok("Effect off — static color.".to_string());
-    }
-    let max = kbd::discover()
-        .first()
-        .map(|kb| kb.max_brightness)
-        .unwrap_or(255);
-    let speed = args.speed.unwrap_or(1.0).clamp(0.1, 4.0);
-    let rear_name = rear_fx.as_ref().map(|e| e.as_str().to_string());
-    let stop = spawn_split(
-        effect.clone(),
-        rear_fx,
-        (args.r, args.g, args.b),
-        args.brightness.min(max),
-        speed,
-    );
-    fx.stops.push(stop);
-    fx.current = effect.as_str().to_string();
-    fx.rear = rear_name.clone().unwrap_or_else(|| "follow".to_string());
-    fx.speed = speed;
-    Ok(match rear_name {
-        Some(r) => format!("Effect {} running ({}x) + rear {}.", effect.label(), speed, r),
-        None => format!("Effect {} running ({}x).", effect.label(), speed),
+    // Scope guard mutex: ubah state efek + spawn, lalu lepaskan SEBELUM
+    // await D-Bus (MutexGuard std tak Send — future Tauri wajib Send).
+    let (fx_name, rear_persist, bright, speed) = {
+        let mut fx = effects
+            .lock()
+            .map_err(|e| format!("effect lock: {e}"))?;
+        fx.stop_all();
+        if effect == kbd_effect::KbdEffect::Static && rear_fx.is_none() {
+            return Ok("Effect off — static color.".to_string());
+        }
+        let max = kbd::discover()
+            .first()
+            .map(|kb| kb.max_brightness)
+            .unwrap_or(255);
+        let speed = args.speed.unwrap_or(1.0).clamp(0.1, 4.0);
+        let rear_name = rear_fx.as_ref().map(|e| e.as_str().to_string());
+        let stop = spawn_split(
+            effect.clone(),
+            rear_fx,
+            (args.r, args.g, args.b),
+            args.brightness.min(max),
+            speed,
+        );
+        fx.stops.push(stop);
+        fx.current = effect.as_str().to_string();
+        fx.rear = rear_name.clone().unwrap_or_else(|| "follow".to_string());
+        fx.speed = speed;
+        (
+            effect.as_str().to_string(),
+            rear_name.clone().unwrap_or_else(|| "follow".to_string()),
+            args.brightness.min(max),
+            speed,
+        )
+    };
+    // Simpan warna dasar + efek ke daemon (best-effort) untuk boot-restore.
+    persist_kbd_via_daemon(bright, args.r, args.g, args.b, &fx_name, &rear_persist, speed).await;
+    Ok(match rear_persist.as_str() {
+        "follow" => format!("Effect {} running ({speed}x).", effect.label()),
+        r => format!("Effect {} running ({speed}x) + rear {r}.", effect.label()),
     })
 }
 

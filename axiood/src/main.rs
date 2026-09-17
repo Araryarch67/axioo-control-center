@@ -1,10 +1,16 @@
-//! `axiood` — privileged daemon: EC fan-curve loop + RAPL, two-way PPD sync.
+//! `axiood` — privileged daemon: EC fan-curve loop + RAPL, two-way PPD sync,
+//! plus keyboard backlight boot-restore.
 //!
 //! - Sumber kebenaran saat boot: PPD `ActiveProfile`.
 //! - GUI/CLI set via `com.axioo.Control.SetProfile` / `SetQuietFan` → daemon
 //!   set PPD balik + apply RAPL + ganti kurva kipas.
 //! - EPP/governor TIDAK disentuh (milik PPD).
 //! - `quiet_fan` murni opsi kipas per mode (tak sentuh PPD/RAPL).
+//! - Warna keyboard terakhir (`SetKbd` → `/var/lib/axiood/kbd.json`)
+//!   di-restore ke sysfs saat daemon start — sebelum SDDM — karena
+//!   firmware selalu reset backlight ke putih tiap reboot dan GUI user
+//!   baru jalan setelah login. Hanya warna dasar statis (animasi efek
+//!   jalan lagi setelah GUI login).
 
 mod kbd_state;
 mod ppd;
@@ -121,12 +127,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )));
     println!("axiood: initial profile {}", state.read().await.label());
 
-    // Restore warna keyboard terakhir SEBELUM serve D-Bus: firmware selalu
-    // reset ke putih tiap reboot, dan SDDM tampil sebelum sesi user jalan.
-    // Best-effort (belum pernah disimpan / LED tak ada = lanjut tanpa gagal).
+    // Restore warna keyboard terakhir: firmware selalu reset ke putih
+    // tiap reboot, dan SDDM tampil sebelum sesi user jalan — daemon
+    // (system service, sebelum display-manager) yang mengembalikannya.
+    // Best-effort (belum pernah disimpan = lanjut tanpa gagal). Bila LED
+    // belum ada (driver telat dimuat), coba lagi di latar — tiap coba
+    // muat file fresh agar tak menimpa SetKbd yang masuk di antaranya.
     match kbd_state::restore() {
         Ok(msg) => println!("axiood: {msg}"),
-        Err(e) => println!("axiood: keyboard restore skipped ({e})"),
+        Err(e) => {
+            println!("axiood: keyboard restore skipped ({e})");
+            if e.contains("no keyboard-backlight LED") {
+                tokio::spawn(async {
+                    for i in 1..=10 {
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                        match kbd_state::restore() {
+                            Ok(msg) => {
+                                println!("axiood: {msg} (retry {i})");
+                                break;
+                            }
+                            Err(e) => {
+                                if !e.contains("no keyboard-backlight LED") {
+                                    println!("axiood: keyboard restore skipped ({e})");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
     }
 
     // Serve com.axioo.Control

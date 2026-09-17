@@ -4,11 +4,71 @@
 //! brightness + RGB over the kernel LED interface), with discovery and
 //! driver-scale handling instead of a hardcoded sysfs path.
 
-use axioo_lib::{kbd, kbd_effect::KbdEffect};
+use axioo_lib::{fan_ctrl, kbd, kbd_effect::KbdEffect};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+
+/// Path state boot-restore milik daemon (lihat `axiood/src/kbd_state.rs`).
+const KBD_STATE_PATH: &str = "/var/lib/axiood/kbd.json";
+
+/// Simpan warna terakhir agar ke-restore sebelum SDDM saat boot.
+/// Best-effort: via D-Bus daemon bila jalan (bisa sebagai user), langsung
+/// ke file bila root + daemon mati. Gagal persist = peringatan saja,
+/// tulis sysfs yang sudah sukses tidak dibatalkan.
+fn persist_boot(brightness: u32, rgb: (u8, u8, u8)) {
+    let effect = "static";
+    let rear = "follow";
+    let speed = 1.0f32;
+    // 1. Via daemon (root yang tulis file).
+    if let Ok(conn) = zbus::blocking::Connection::system() {
+        if let Ok(proxy) = AxiooKbdProxyBlocking::new(&conn) {
+            if proxy
+                .set_kbd(brightness, rgb.0, rgb.1, rgb.2, effect, rear, speed)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+    // 2. Langsung (hanya bisa bila root).
+    if !fan_ctrl::is_root() {
+        return;
+    }
+    if let Some(dir) = std::path::Path::new(KBD_STATE_PATH).parent() {
+        if std::fs::create_dir_all(dir).is_err() {
+            return;
+        }
+    }
+    let json = format!(
+        "{{\"brightness\":{brightness},\"r\":{},\"g\":{},\"b\":{},\"effect\":\"{effect}\",\"rear\":\"{rear}\",\"speed\":{speed}}}",
+        rgb.0, rgb.1, rgb.2,
+    );
+    if std::fs::write(KBD_STATE_PATH, json).is_err() {
+        eprintln!("warning: failed to persist keyboard state for boot restore");
+    }
+}
+
+#[zbus::proxy(
+    interface = "com.axioo.Control",
+    default_service = "com.axioo.Control",
+    default_path = "/com/axioo/Control"
+)]
+trait AxiooKbd {
+    #[allow(non_snake_case)]
+    #[allow(clippy::too_many_arguments)]
+    fn set_kbd(
+        &self,
+        brightness: u32,
+        r: u8,
+        g: u8,
+        b: u8,
+        effect: &str,
+        rear: &str,
+        speed: f32,
+    ) -> zbus::Result<String>;
+}
 
 pub fn status() {
     let devs = kbd::discover();
@@ -78,6 +138,7 @@ pub fn set(brightness: Option<u32>, rgb: Option<String>, preset: Option<String>,
         std::process::exit(1);
     }
     let mut failed = false;
+    let mut saved: Option<(u32, (u8, u8, u8))> = None;
     for d in &devs {
         // Keep current brightness when the flag is omitted (like the
         // reference tool keeps the slider value).
@@ -98,14 +159,17 @@ pub fn set(brightness: Option<u32>, rgb: Option<String>, preset: Option<String>,
             continue;
         }
         match kbd::set(d, b, rgb) {
-            Ok(()) => println!(
-                "{} <- brightness={} rgb={},{},{}",
-                d.name,
-                b.min(d.max_brightness),
-                rgb.0,
-                rgb.1,
-                rgb.2
-            ),
+            Ok(()) => {
+                println!(
+                    "{} <- brightness={} rgb={},{},{}",
+                    d.name,
+                    b.min(d.max_brightness),
+                    rgb.0,
+                    rgb.1,
+                    rgb.2
+                );
+                saved = saved.or(Some((b.min(d.max_brightness), rgb)));
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 failed = true;
@@ -114,6 +178,11 @@ pub fn set(brightness: Option<u32>, rgb: Option<String>, preset: Option<String>,
     }
     if failed {
         std::process::exit(3);
+    }
+    if !dry_run {
+        if let Some((b, c)) = saved {
+            persist_boot(b, c);
+        }
     }
 }
 
@@ -135,13 +204,17 @@ fn nudge(dir: i32) {
         std::process::exit(1);
     }
     let mut failed = false;
+    let mut saved: Option<(u32, (u8, u8, u8))> = None;
     for d in &devs {
         let cur = kbd::read_state(d).map(|s| s.brightness).unwrap_or(0);
         let rgb = kbd::read_state(d).map(|s| s.rgb).unwrap_or((255, 255, 255));
         let step = (d.max_brightness / 10).max(1) as i32;
         let next = (cur as i32 + dir * step).clamp(0, d.max_brightness as i32) as u32;
         match kbd::set(d, next, rgb) {
-            Ok(()) => println!("{} <- brightness={next}", d.name),
+            Ok(()) => {
+                println!("{} <- brightness={next}", d.name);
+                saved = saved.or(Some((next, rgb)));
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 failed = true;
@@ -150,6 +223,9 @@ fn nudge(dir: i32) {
     }
     if failed {
         std::process::exit(3);
+    }
+    if let Some((b, c)) = saved {
+        persist_boot(b, c);
     }
 }
 
@@ -199,12 +275,17 @@ pub fn effect(name: &str, rgb: Option<String>, preset: Option<String>, rear: Opt
             eprintln!("error: no LED found");
             std::process::exit(1);
         }
+        let mut saved: Option<(u32, (u8, u8, u8))> = None;
         for d in &devs {
             let b = kbd::read_state(d)
                 .map(|s| s.brightness)
                 .unwrap_or(d.max_brightness);
             let _ = kbd::set(d, b, base);
             println!("{} <- static rgb={},{},{}", d.name, base.0, base.1, base.2);
+            saved = saved.or(Some((b.min(d.max_brightness), base)));
+        }
+        if let Some((b, c)) = saved {
+            persist_boot(b, c);
         }
         return;
     }

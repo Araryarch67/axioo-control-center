@@ -124,6 +124,7 @@ impl AxiooControl {
     /// tulis sysfs + file state; boot-restore baca file itu sebelum SDDM.
     /// Hanya warna dasar statis yang diterapkan di sini; animasi efek
     /// jalan di proses GUI/CLI, warna dasarnya cukup untuk SDDM.
+    #[allow(clippy::too_many_arguments)]
     async fn set_kbd(
         &self,
         brightness: u32,
