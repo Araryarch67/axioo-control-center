@@ -119,6 +119,43 @@ impl AxiooControl {
         st.label()
     }
 
+    /// Simpan + terapkan warna keyboard (dipakai GUI/CLI sebagai user —
+    /// mereka tak bisa tulis `/var/lib` langsung). Daemon (root) yang
+    /// tulis sysfs + file state; boot-restore baca file itu sebelum SDDM.
+    /// Hanya warna dasar statis yang diterapkan di sini; animasi efek
+    /// jalan di proses GUI/CLI, warna dasarnya cukup untuk SDDM.
+    async fn set_kbd(
+        &self,
+        brightness: u32,
+        r: u8,
+        g: u8,
+        b: u8,
+        effect: String,
+        rear: String,
+        speed: f32,
+    ) -> zbus::fdo::Result<String> {
+        let p = crate::kbd_state::sanitize(brightness, r, g, b, &effect, &rear, speed)
+            .map_err(zbus::fdo::Error::InvalidArgs)?;
+        let n = crate::kbd_state::apply_static(p.brightness, p.rgb)
+            .map_err(zbus::fdo::Error::Failed)?;
+        crate::kbd_state::save(&p).map_err(zbus::fdo::Error::Failed)?;
+        Ok(format!(
+            "keyboard saved: brightness {} rgb({},{},{}) effect={} ({} zones)",
+            p.brightness, p.rgb.0, p.rgb.1, p.rgb.2, p.effect, n,
+        ))
+    }
+
+    /// State keyboard tersimpan (JSON; "" bila belum pernah disimpan).
+    async fn get_kbd(&self) -> String {
+        match crate::kbd_state::load() {
+            Some(p) => format!(
+                "{{\"brightness\":{},\"r\":{},\"g\":{},\"b\":{},\"effect\":\"{}\",\"rear\":\"{}\",\"speed\":{}}}",
+                p.brightness, p.rgb.0, p.rgb.1, p.rgb.2, p.effect, p.rear, p.speed,
+            ),
+            None => String::new(),
+        }
+    }
+
     #[zbus(property)]
     async fn profile(&self) -> String {
         self.get_profile().await

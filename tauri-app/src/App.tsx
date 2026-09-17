@@ -883,7 +883,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-[14px] font-bold">Start at login (tray)</div>
-            <div className="text-[12.5px] text-faint">App hides to tray · needs a tray host (e.g. waybar) on Hyprland</div>
+            <div className="text-[12.5px] text-faint">App hides to tray · no WM setup needed (systemd) · needs tray host (e.g. waybar) on Hyprland</div>
           </div>
           <Switch on={autoStart ?? false} disabled={!isTauri() || autoStart == null} onClick={flipAutoStart} />
         </div>

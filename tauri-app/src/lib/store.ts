@@ -253,6 +253,14 @@ export const useStore = create<AppStore>()(
       hydrateKbd: (snap) => {
         const st = get();
         if (st.kbdHydrated || snap.kbd_nodes === 0) return;
+        // Restore tertunda (user pernah ubah warna tapi tulis-balik sesi
+        // ini belum sukses): JANGAN adopsi hardware putih hasil reset
+        // firmware — itu menghapus warna terakhir tersimpan. Tandai
+        // hydrated saja; maintainKbd yang akan menulis balik.
+        if (st.kbdTouched && !st.kbdRestored) {
+          set({ kbdHydrated: true });
+          return;
+        }
         const z = st.kbdZone != null ? snap.kbd_zones[st.kbdZone] : snap.kbd_zones[0];
         if (z) {
           const c = z[1];

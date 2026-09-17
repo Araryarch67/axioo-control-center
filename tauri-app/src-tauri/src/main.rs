@@ -45,6 +45,17 @@ trait AxiooControl {
     async fn set_fan_ec_auto(&self, auto: bool) -> zbus::Result<String>;
     async fn set_fan_manual(&self, duty: u8) -> zbus::Result<String>;
     async fn clear_fan_override(&self) -> zbus::Result<String>;
+    async fn set_kbd(
+        &self,
+        brightness: u32,
+        r: u8,
+        g: u8,
+        b: u8,
+        effect: &str,
+        rear: &str,
+        speed: f32,
+    ) -> zbus::Result<String>;
+    async fn get_kbd(&self) -> zbus::Result<String>;
 }
 
 #[zbus::proxy(
@@ -842,9 +853,25 @@ async fn battery_set(start: Option<u64>, end: Option<u64>) -> Result<String, Str
 // tauri-plugin-autostart menulis `Exec=<path AppImage mentah ber-spasi>`
 // yang DITOLAK systemd-xdg-autostart-generator ("executable does not
 // exist") — toggle ON = entry mati, toggle user menimpa file wrapper.
-// Kita tulis `~/.config/autostart/axioo-center.desktop` dengan Exec stabil
-// ke `~/.local/bin/axioo-center-autostart` (tahan AppImageLauncher
-// pindah/rename AppImage). Dipakai command frontend + menu tray.
+//
+// Mekanisme UTAMA = systemd user unit (`axioo-center.service`,
+// `WantedBy=graphical-session.target`): user manager yang start,
+// TANPA setup di WM (tak perlu `exec-once` Hyprland / `add-wants`
+// xdg-desktop-autostart manual — keduanya rapuh: di mesin ini
+// `xdg-desktop-autostart.target` inactive + ordering-cycle melempar
+// semua job autostart). Entry XDG `*.desktop` tetap ditulis sebagai
+// kompat DE lain; single-instance backend melindungi dari start ganda.
+// Dipakai command frontend + menu tray.
+
+/// Wrapper stabil (tahan AppImageLauncher pindah/rename AppImage).
+/// Satu sumber dengan `packaging/autostart/axioo-center-autostart`
+/// agar toggle = zero-setup walau repo tak ada (AppImage terpasang).
+const AUTOSTART_WRAPPER: &str =
+    include_str!("../../../packaging/autostart/axioo-center-autostart");
+
+/// Satu sumber dengan `packaging/systemd-user/axioo-center.service`.
+const AUTOSTART_UNIT: &str =
+    include_str!("../../../packaging/systemd-user/axioo-center.service");
 
 /// Entry autostart milik kita (Exec stabil → wrapper).
 fn autostart_file() -> std::path::PathBuf {
@@ -870,19 +897,87 @@ fn autostart_desktop_content() -> String {
 }
 
 fn autostart_enabled() -> bool {
-    autostart_file().exists()
+    // Unit systemd = mekanisme utama (Hyprland); desktop = kompat DE.
+    // ON bila salah satunya ada (migrasi dari instalasi lama yg cuma desktop).
+    autostart_unit_link().exists() || autostart_file().exists()
 }
 
-/// Tulis/hapus entry + bersihkan warisan plugin. Ok(...) = state baru.
+/// Unit systemd user (`~/.config/systemd/user/axioo-center.service`).
+fn autostart_unit_file() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".config/systemd/user/axioo-center.service")
+}
+
+/// Symlink enable = `[Install] WantedBy=graphical-session.target`.
+fn autostart_unit_link() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(
+        ".config/systemd/user/graphical-session.target.wants/axioo-center.service",
+    )
+}
+
+fn autostart_wrapper_file() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".local/bin/axioo-center-autostart")
+}
+
+/// Pastikan wrapper ada + executable (tulis dari konstanta embedded bila
+/// hilang — mis. user hapus manual / install AppImage tanpa setup.sh).
+fn autostart_ensure_wrapper() -> Result<(), String> {
+    let p = autostart_wrapper_file();
+    if p.exists() {
+        return Ok(());
+    }
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("wrapper dir: {e}"))?;
+    }
+    std::fs::write(&p, AUTOSTART_WRAPPER).map_err(|e| format!("wrapper write: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("wrapper chmod: {e}"))?;
+    }
+    Ok(())
+}
+
+fn autostart_daemon_reload() {
+    // Best-effort: gagal (mis. tanpa systemd) bukan error toggle.
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .output();
+}
+
+/// Tulis/hapus entry desktop + unit systemd + bersihkan warisan plugin.
+/// Ok(...) = state baru.
 fn autostart_write(enabled: bool) -> Result<bool, String> {
     if enabled {
+        autostart_ensure_wrapper()?;
         if let Some(dir) = autostart_file().parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("autostart dir: {e}"))?;
         }
         std::fs::write(autostart_file(), autostart_desktop_content())
             .map_err(|e| format!("autostart write: {e}"))?;
+        if let Some(dir) = autostart_unit_file().parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("unit dir: {e}"))?;
+        }
+        std::fs::write(autostart_unit_file(), AUTOSTART_UNIT)
+            .map_err(|e| format!("unit write: {e}"))?;
+        // Enable = symlink wants (setara `systemctl --user enable`,
+        // tanpa memanggil systemctl agar tetap jalan tanpa systemd aktif).
+        if let Some(dir) = autostart_unit_link().parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("wants dir: {e}"))?;
+        }
+        let _ = std::fs::remove_file(autostart_unit_link());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(autostart_unit_file(), autostart_unit_link())
+            .map_err(|e| format!("unit enable: {e}"))?;
+        autostart_daemon_reload();
     } else {
         let _ = std::fs::remove_file(autostart_file());
+        let _ = std::fs::remove_file(autostart_unit_link());
+        let _ = std::fs::remove_file(autostart_unit_file());
+        autostart_daemon_reload();
     }
     let _ = std::fs::remove_file(autostart_legacy_file());
     Ok(enabled)
@@ -1026,6 +1121,29 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn autostart_unit_needs_no_wm_setup() {
+        // Syarat "tanpa setup di WM": WantedBy + After graphical-session
+        // (user manager yg start), Exec tanpa spasi via %h.
+        assert!(
+            AUTOSTART_UNIT.contains("WantedBy=graphical-session.target"),
+            "unit harus WantedBy=graphical-session.target"
+        );
+        assert!(
+            AUTOSTART_UNIT.contains("After=graphical-session.target"),
+            "unit harus After=graphical-session.target"
+        );
+        assert!(
+            AUTOSTART_UNIT.contains("ExecStart=%h/.local/bin/axioo-center-autostart"),
+            "Exec harus stabil tanpa spasi (wrapper %h)"
+        );
+        let desk = autostart_desktop_content();
+        assert!(
+            desk.contains("Exec=") && desk.contains(".local/bin/axioo-center-autostart"),
+            "desktop tetap menunjuk wrapper stabil"
+        );
+    }
 
     #[test]
     fn matugen_rev_mirrors_colors_json() {

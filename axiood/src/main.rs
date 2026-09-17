@@ -6,6 +6,7 @@
 //! - EPP/governor TIDAK disentuh (milik PPD).
 //! - `quiet_fan` murni opsi kipas per mode (tak sentuh PPD/RAPL).
 
+mod kbd_state;
 mod ppd;
 mod profile;
 mod rapl_apply;
@@ -119,6 +120,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ppd_current.clone(),
     )));
     println!("axiood: initial profile {}", state.read().await.label());
+
+    // Restore warna keyboard terakhir SEBELUM serve D-Bus: firmware selalu
+    // reset ke putih tiap reboot, dan SDDM tampil sebelum sesi user jalan.
+    // Best-effort (belum pernah disimpan / LED tak ada = lanjut tanpa gagal).
+    match kbd_state::restore() {
+        Ok(msg) => println!("axiood: {msg}"),
+        Err(e) => println!("axiood: keyboard restore skipped ({e})"),
+    }
 
     // Serve com.axioo.Control
     let svc = AxiooControl {

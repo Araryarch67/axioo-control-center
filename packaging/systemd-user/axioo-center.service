@@ -1,0 +1,23 @@
+[Unit]
+Description=Axioo Control Center (tray, start minimized)
+Documentation=https://github.com/ararya/axioo-control-center
+# Tanpa setup WM: user manager yang start unit ini saat
+# graphical-session.target tercapai (Hyprland/SDDM sudah melakukannya).
+# XDG autostart (*.desktop) TIDAK diandalkan — di Hyprland
+# xdg-desktop-autostart.target sering inactive / kena ordering-cycle
+# dengan generator sehingga entry .desktop tak pernah jalan.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+# %h = $HOME (tanpa spasi) → tahan AppImageLauncher pindah/rename AppImage.
+ExecStart=%h/.local/bin/axioo-center-autostart
+Restart=on-failure
+RestartSec=5
+
+# Akses display Wayland/X11.
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target
