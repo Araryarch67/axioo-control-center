@@ -25,7 +25,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent,
 };
-use tauri_plugin_autostart::ManagerExt;
 
 // ---------- D-Bus proxies (async, same bus as axiood) ----------
 
@@ -838,13 +837,79 @@ async fn battery_set(start: Option<u64>, end: Option<u64>) -> Result<String, Str
     Ok("Charge threshold saved.".to_string())
 }
 
+// ---------- Autostart login (dikelola sendiri, tanpa plugin) ----------
+//
+// tauri-plugin-autostart menulis `Exec=<path AppImage mentah ber-spasi>`
+// yang DITOLAK systemd-xdg-autostart-generator ("executable does not
+// exist") — toggle ON = entry mati, toggle user menimpa file wrapper.
+// Kita tulis `~/.config/autostart/axioo-center.desktop` dengan Exec stabil
+// ke `~/.local/bin/axioo-center-autostart` (tahan AppImageLauncher
+// pindah/rename AppImage). Dipakai command frontend + menu tray.
+
+/// Entry autostart milik kita (Exec stabil → wrapper).
+fn autostart_file() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".config/autostart/axioo-center.desktop")
+}
+
+/// Bekas file plugin (`app_name` = "Axioo Control Center", Exec mentah
+/// ber-spasi, tak pernah valid) — dibersihkan tiap tulis agar tak dobel.
+fn autostart_legacy_file() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::Path::new(&home).join(".config/autostart/Axioo Control Center.desktop")
+}
+
+fn autostart_desktop_content() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    ["[Desktop Entry]", "Type=Application", "Name=Axioo Control Center"]
+        .join("\n")
+        + "\nComment=Hardware control for Axioo (Clevo) laptops (start minimized to tray)\n"
+        + &format!("Exec={home}/.local/bin/axioo-center-autostart\n")
+        + "Icon=axioo-center\nCategories=System;Settings;HardwareSettings;\n\
+              Terminal=false\nX-GNOME-Autostart-enabled=true\nStartupWMClass=axioo-center\n"
+}
+
+fn autostart_enabled() -> bool {
+    autostart_file().exists()
+}
+
+/// Tulis/hapus entry + bersihkan warisan plugin. Ok(...) = state baru.
+fn autostart_write(enabled: bool) -> Result<bool, String> {
+    if enabled {
+        if let Some(dir) = autostart_file().parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("autostart dir: {e}"))?;
+        }
+        std::fs::write(autostart_file(), autostart_desktop_content())
+            .map_err(|e| format!("autostart write: {e}"))?;
+    } else {
+        let _ = std::fs::remove_file(autostart_file());
+    }
+    let _ = std::fs::remove_file(autostart_legacy_file());
+    Ok(enabled)
+}
+
+#[tauri::command]
+fn autostart_get() -> bool {
+    autostart_enabled()
+}
+
+#[tauri::command]
+fn autostart_set(enabled: bool) -> Result<bool, String> {
+    autostart_write(enabled)
+}
+
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            // Argumen saat dijalankan otomatis ketika login → mulai sembunyi di tray.
-            Some(vec!["--minimized"]),
-        ))
+        // Single-instance: peluncuran kedua mati sendiri dan memunculkan
+        // window instance pertama (bukan dua tray icon + dua backend yang
+        // rebutan tulis sysfs LED).
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .manage(Mutex::new(SamplerState {
             prev_stat: cpu::read_times(),
             prev_rapl: rapl::domains(),
@@ -868,11 +933,7 @@ fn main() {
                 });
             let show = MenuItemBuilder::with_id("show", "Show").build(app)?;
             let autostart = CheckMenuItemBuilder::with_id("autostart", "Start on login")
-                .checked(
-                    app.autolaunch()
-                        .is_enabled()
-                        .unwrap_or(false),
-                )
+                .checked(autostart_enabled())
                 .build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app)
@@ -893,9 +954,8 @@ fn main() {
                         }
                     }
                     "autostart" => {
-                        let m = app.autolaunch();
-                        let now_on = m.is_enabled().unwrap_or(false);
-                        let ok = if now_on { m.disable() } else { m.enable() }.is_ok();
+                        let now_on = autostart_enabled();
+                        let ok = autostart_write(!now_on).is_ok();
                         if ok {
                             if let Some(w) = app.get_webview_window("main") {
                                 let _ = w.emit("autostart-changed", !now_on);
@@ -956,6 +1016,8 @@ fn main() {
             kbd_effect_stop,
             battery_set,
             get_matugen,
+            autostart_get,
+            autostart_set,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run axioo-center");

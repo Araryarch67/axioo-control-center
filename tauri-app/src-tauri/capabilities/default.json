@@ -9,7 +9,6 @@
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
-    "core:event:allow-listen",
-    "autostart:default"
+    "core:event:allow-listen"
   ]
 }

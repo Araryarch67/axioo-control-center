@@ -7,8 +7,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EFFECTS, REAR_EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
 import { useStore, applyTheme, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
-import { matugenDominant, refreshMatugen } from "@/lib/matugen";
-import { cn, curveDuty, fmt1, hexToRgb, rgbToHex } from "@/lib/utils";
+import { refreshMatugen } from "@/lib/matugen";
+import { cn, curveDuty, fmt1, hexToRgb } from "@/lib/utils";
 import { Bar, Card, CardTitle, CButton, Chip, Seg, Switch, Toast } from "@/components/ui";
 import { Stat, SpecRow } from "@/components/Gauge";
 import { KeyboardVisual } from "@/components/KeyboardVisual";
@@ -559,46 +559,25 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
 
   // Ikuti wallpaper: warna dominan matugen yang dicerahkan → SEMUA zona.
   // Matikan efek dulu agar thread animasi tak menimpa hasil tulis.
+  // Eksekusi di store (applyKbdFollow) agar jalan tiap tick — termasuk
+  // boot saat tab Keys tak dibuka; panel hanya mirror statusnya.
   const follow = useStore((s) => s.kbdFollowWp);
   const setFollow = useStore((s) => s.setKbdFollowWp);
-  const followRev = React.useRef(0);
-  const applyFollow = async (b: number): Promise<boolean> => {
-    const c = await matugenDominant();
-    if (!c) { setStatus("matugen unreadable — check Ryoku"); return false; }
-    const h = rgbToHex(c[0], c[1], c[2]);
-    setHex(h); setDraft(h);
-    setFx("static"); setRearFx("follow");
-    lastFxChange.current = Date.now();
-    try {
-      await api.kbdEffectStop();
-      await api.kbdSet(null, Math.min(b, max), c[0], c[1], c[2]);
-      setStatus(`following wallpaper · ${new Date().toLocaleTimeString("en-GB")}`);
-      return true;
-    } catch (e) {
-      setStatus(`failed: ${String(e).slice(0, 110)}`);
-      return false;
-    }
-  };
   const flipFollow = () => {
     if (!canWrite) return;
     if (!follow) {
       markDirty();
       setFollow(true);
-      void applyFollow(bright);
+      setStatus("writing…");
+      void (async () => {
+        const ok = await useStore.getState().applyKbdFollow(bright, snap?.matugen_rev ?? 0);
+        setStatus(ok ? `following wallpaper · ${new Date().toLocaleTimeString("en-GB")}` : "matugen unreadable — check Ryoku");
+      })();
     } else {
       setFollow(false);
       setStatus("in sync");
     }
   };
-  // Wallpaper ganti (revisi palet naik) → LED ikut. Tanpa timer tambahan.
-  React.useEffect(() => {
-    const rev = snap?.matugen_rev ?? 0;
-    if (!follow || rev === 0 || rev === followRev.current) return;
-    followRev.current = rev;
-    markDirty();
-    void applyFollow(bright);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [snap?.matugen_rev]);
 
   // Live-apply debounce; lewati bila invalid atau sudah sinkron.
   React.useEffect(() => {
@@ -882,8 +861,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
     let unlisten: (() => void) | undefined;
     (async () => {
       try {
-        const m = await import("@tauri-apps/plugin-autostart");
-        if (alive) setAutoStart(await m.isEnabled());
+        if (alive) setAutoStart(await api.autostartGet());
         const { listen } = await import("@tauri-apps/api/event");
         unlisten = await listen<boolean>("autostart-changed", (e) => {
           if (alive) setAutoStart(e.payload);
@@ -895,9 +873,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
   const flipAutoStart = async () => {
     if (autoStart == null) return;
     try {
-      const m = await import("@tauri-apps/plugin-autostart");
-      if (autoStart) await m.disable(); else await m.enable();
-      setAutoStart(!autoStart);
+      setAutoStart(await api.autostartSet(!autoStart));
     } catch { /* toast di level App bila perlu */ }
   };
   return (

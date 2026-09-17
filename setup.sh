@@ -81,11 +81,11 @@ log "=== [0b/4] system deps (pacman, idempoten) ==="
 if [ "$QUIET" = 1 ]; then
     quiet_run 1 "system deps" sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
         python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
-        librsvg openssl appmenu-gtk-module
+        librsvg openssl appmenu-gtk-module man-db
 else
     sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
         python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
-        librsvg openssl appmenu-gtk-module 2>&1 | tail -n 3 || true
+        librsvg openssl appmenu-gtk-module man-db 2>&1 | tail -n 3 || true
 fi
 
 log "=== [0/4] cek AUR helper (buat driver clevo) ==="
@@ -233,6 +233,14 @@ if [ -f "$HERE/target/release/axioo-ctl" ]; then
     cp "$HERE/target/release/axioo-ctl" "$HOME/.local/bin/"
     chmod +x "$HOME/.local/bin/axioo-ctl"
 fi
+# Wrapper autostart stabil (canonical: packaging/autostart/axioo-center-autostart).
+# AppImageLauncher memindah/rename AppImage tiap integrate/update, jadi Exec
+# .desktop TAK BOLEH hardcode path AppImage — wrapper resolve yang terbaru
+# tiap login. Backend GUI (autostart_get/set) menulis Exec yang sama.
+cp "$HERE/packaging/autostart/axioo-center-autostart" "$HOME/.local/bin/"
+chmod +x "$HOME/.local/bin/axioo-center-autostart"
+# Man page axioo-ctl (butuh man-db; sudah di system deps di atas).
+sudo install -Dm644 "$HERE/packaging/man/axioo-ctl.1" /usr/share/man/man1/axioo-ctl.1
 cp "$HERE/packaging/appimage/$APPID.desktop" "$HOME/.local/share/applications/"
 # APPIMAGELAUNCHER_DISABLE=1 agar AppImageLauncher tak memunculkan dialog
 # "integrate?" saat app dijalankan dari luar ~/Applications.
@@ -252,8 +260,11 @@ cp "$HERE/dist/icon.png" "$HOME/.local/share/icons/hicolor/256x256/apps/$APPID.p
 # (tauri icon → tauri-app/src-tauri/icons/* untuk bundle AppImage;
 #  resize 256 via PIL untuk hicolor launcher). Regenerasi bila logo ganti.
 # Autostart login: .desktop mandiri (bukan via toggle in-app) agar langsung
-# aktif habis setup; Exec = AppImage terinstall + --minimized (mulai di tray).
-# Toggle di Settings / menu tray tetap bisa mematikan lagi (satu file yang sama).
+# aktif habis setup. Exec = WRAPPER stabil (bukan path AppImage yang
+# berversi + bisa dipindah AppImageLauncher); wrapper menambahkan
+# --minimized sendiri (mulai di tray).
+# Toggle di Settings / menu tray menulis SATU file yang sama (lihat
+# autostart_get/set di tauri-app/src-tauri/src/main.rs).
 mkdir -p "$HOME/.config/autostart"
 AUTOSTART="$HOME/.config/autostart/axioo-center.desktop"
 cat > "$AUTOSTART" <<EOF
@@ -261,10 +272,11 @@ cat > "$AUTOSTART" <<EOF
 Type=Application
 Name=Axioo Control Center
 Comment=Hardware control for Axioo (Clevo) laptops (start minimized to tray)
-Exec="$APPIMG" --minimized
+Exec=$HOME/.local/bin/axioo-center-autostart
 Icon=$APPID
 Categories=System;Settings;HardwareSettings;
 Terminal=false
+X-GNOME-Autostart-enabled=true
 StartupWMClass=$APPCLASS
 EOF
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true

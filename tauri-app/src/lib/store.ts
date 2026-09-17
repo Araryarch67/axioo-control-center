@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { api, type Snapshot, type ThemeName } from "./api";
-import { clearMatugen, refreshMatugen } from "./matugen";
-import { rgbToHex } from "./utils";
+import { api, EFFECTS, type Snapshot, type ThemeName } from "./api";
+import { clearMatugen, matugenDominant, refreshMatugen } from "./matugen";
+import { hexToRgb, rgbToHex } from "./utils";
 
 export type Tab = "dashboard" | "performance" | "fan" | "keyboard" | "power" | "settings";
 
@@ -55,6 +55,21 @@ interface AppStore {
   kbdHydrated: boolean;
   /** Init sekali dari snapshot, dari ZONA YANG DIPILIH (anti bug reset). */
   hydrateKbd: (snap: Snapshot) => void;
+  /** `true` bila user pernah mengubah LED (persist) — syarat boot-restore. */
+  kbdTouched: boolean;
+  /** Sekali per sesi: state LED tersimpan sudah ditulis balik ke hardware. */
+  kbdRestored: boolean;
+  /** Revisi palet terakhir yang sudah diterapkan ke LED (sesi, anti double). */
+  kbdFollowRev: number;
+  /**
+   * Jaga LED tiap tick, SEBELUM `hydrateKbd` (hardware selalu reset ke
+   * putih tiap reboot, jadi adopsi-dari-hardware saja menghapus warna
+   * terakhir user). Follow → warna dominan matugen; manual → tulis balik
+   * state tersimpan sekali per sesi. No-op bila sysfs tak writable.
+   */
+  maintainKbd: (snap: Snapshot) => void;
+  /** Terapkan warna dominan matugen ke LED (dipakai tick + toggle manual). */
+  applyKbdFollow: (bright: number, rev: number) => Promise<boolean>;
   // fan: kurva preview lokal + manual duty (persist)
   fanCurve: Array<[number, number]>;
   setFanCurve: (c: Array<[number, number]>) => void;
@@ -116,6 +131,9 @@ export const useStore = create<AppStore>()(
           try {
             const s = await api.snapshot();
             fails = 0;
+            // maintainKbd DULU (tulis-balik state tersimpan), baru hydrate
+            // (adopsi hardware) — hardware selalu reset tiap reboot.
+            get().maintainKbd(s);
             get().hydrateKbd(s);
             // Kurva tampil mengikuti daemon (sumber kebenaran GetCurve).
             if (s.profile.daemon && s.profile.curve.length > 0) {
@@ -155,22 +173,79 @@ export const useStore = create<AppStore>()(
       kbdZone: null,
       setKbdZone: (kbdZone) => set({ kbdZone }),
       kbdBright: 255,
-      setKbdBright: (kbdBright) => set({ kbdBright }),
+      setKbdBright: (kbdBright) => set({ kbdBright, kbdTouched: true }),
       kbdHex: "#f5efe0",
-      setKbdHex: (kbdHex) => set({ kbdHex }),
+      setKbdHex: (kbdHex) => set({ kbdHex, kbdTouched: true }),
       kbdDraft: "#f5efe0",
       setKbdDraft: (kbdDraft) => set({ kbdDraft }),
       kbdFx: "static",
-      setKbdFx: (kbdFx) => set({ kbdFx }),
+      setKbdFx: (kbdFx) => set({ kbdFx, kbdTouched: true }),
       kbdRearFx: "follow",
-      setKbdRearFx: (kbdRearFx) => set({ kbdRearFx }),
+      setKbdRearFx: (kbdRearFx) => set({ kbdRearFx, kbdTouched: true }),
       kbdSpeed: 1,
-      setKbdSpeed: (kbdSpeed) => set({ kbdSpeed }),
+      setKbdSpeed: (kbdSpeed) => set({ kbdSpeed, kbdTouched: true }),
       kbdFollowWp: false,
       setKbdFollowWp: (kbdFollowWp) => set({ kbdFollowWp }),
       kbdDirty: false,
       markKbdDirty: () => set({ kbdDirty: true }),
       kbdHydrated: false,
+      kbdTouched: false,
+      kbdRestored: false,
+      kbdFollowRev: 0,
+      applyKbdFollow: async (bright, rev) => {
+        const c = await matugenDominant();
+        if (!c) return false;
+        const h = rgbToHex(c[0], c[1], c[2]);
+        const max = get().snap?.kbd_max || 255;
+        const b = Math.min(bright, max);
+        try {
+          await api.kbdEffectStop();
+          await api.kbdSet(null, b, c[0], c[1], c[2]);
+        } catch {
+          return false;
+        }
+        set({
+          kbdHex: h, kbdDraft: h, kbdFx: "static", kbdRearFx: "follow",
+          kbdTouched: true, kbdFollowRev: rev, kbdRestored: true,
+        });
+        return true;
+      },
+      maintainKbd: (snap) => {
+        const st = get();
+        if (snap.kbd_nodes === 0 || !snap.kbd_writable) return;
+        const rev = snap.matugen_rev ?? 0;
+        // Mode follow: terapkan tiap revisi palet berubah (termasuk boot).
+        if (st.kbdFollowWp) {
+          if (rev !== 0 && rev !== st.kbdFollowRev) {
+            void st.applyKbdFollow(st.kbdBright, rev);
+          }
+          return;
+        }
+        // Mode manual: tulis balik warna terakhir sekali per sesi.
+        if (st.kbdRestored || !st.kbdTouched) return;
+        const validFx = (f: string) => EFFECTS.some((e) => e.id === f);
+        const fx = validFx(st.kbdFx) ? st.kbdFx : "static";
+        const rear = st.kbdRearFx === "follow" || validFx(st.kbdRearFx) ? st.kbdRearFx : "follow";
+        if (!/^#[0-9a-fA-F]{6}$/.test(st.kbdHex)) {
+          set({ kbdRestored: true });
+          return;
+        }
+        const [r, g, bl] = hexToRgb(st.kbdHex);
+        const bright = Math.min(st.kbdBright, snap.kbd_max || 255);
+        const hex = st.kbdHex;
+        void (async () => {
+          try {
+            if (fx === "static" && rear === "follow") {
+              await api.kbdSet(null, bright, r, g, bl);
+            } else {
+              await api.kbdEffectStart(fx, r, g, bl, bright, st.kbdSpeed, rear);
+            }
+            set({ kbdDraft: hex, kbdRestored: true });
+          } catch {
+            /* sysfs gagal (mis. udev belum) — coba lagi tick berikutnya */
+          }
+        })();
+      },
       fanCurve: REFERENCE_CURVE,
       setFanCurve: (fanCurve) => set({ fanCurve }),
       fanManualDuty: 70,
@@ -203,6 +278,10 @@ export const useStore = create<AppStore>()(
         tab: s.tab,
         theme: s.theme,
         kbdZone: s.kbdZone,
+        kbdHex: s.kbdHex,
+        kbdDraft: s.kbdHex,
+        kbdBright: s.kbdBright,
+        kbdTouched: s.kbdTouched,
         kbdFx: s.kbdFx,
         kbdRearFx: s.kbdRearFx,
         kbdSpeed: s.kbdSpeed,

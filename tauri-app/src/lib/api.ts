@@ -85,6 +85,9 @@ export const api = {
     invoke<string>("battery_set", { start, end }),
   /** Palet matugen Ryoku (Err bila ~/.cache/ryoku/colors.json tak ada). */
   matugen: () => invoke<Record<string, string>>("get_matugen"),
+  /** Autostart login (entry wrapper, bukan plugin — lihat main.rs). */
+  autostartGet: () => invoke<boolean>("autostart_get"),
+  autostartSet: (enabled: boolean) => invoke<boolean>("autostart_set", { enabled }),
 };
 
 export const THEMES = [

@@ -65,4 +65,7 @@ package() {
     "$pkgdir/usr/share/doc/axioo-control-center/ec-fan-protocol.md"
   install -Dm644 docs/kbd-backlight.md \
     "$pkgdir/usr/share/doc/axioo-control-center/kbd-backlight.md"
+  # man page
+  install -Dm644 packaging/man/axioo-ctl.1 \
+    "$pkgdir/usr/share/man/man1/axioo-ctl.1"
 }

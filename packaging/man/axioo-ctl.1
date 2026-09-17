@@ -1,0 +1,173 @@
+.TH AXIOO-CTL 1 "September 2026" "axioo-control-center 0.1.0" "User Commands"
+.SH NAME
+axioo-ctl \- Linux control utility for Axioo (Clevo) laptops
+.SH SYNOPSIS
+.B axioo-ctl
+.RI [ COMMAND ]
+.RI [ OPTIONS ]
+.SH DESCRIPTION
+.B axioo-ctl
+is the command-line client of Axioo Control Center, the Linux hardware
+control utility for Axioo laptops (Clevo barebones). Most commands are
+read-only and work as a normal user; commands that write embedded
+controller (EC) registers or firmware limits need root (run via
+.B sudo
+or
+.BR pkexec )
+or the
+.B axiood
+daemon (preferred: the GUI and
+.B axioo-ctl profile
+talk to the daemon over D-Bus,
+.BR com.axioo.Control ).
+.PP
+The continuous fan-curve loop belongs to
+.BR axiood (8)
+running as root. Direct EC writes from the CLI are limited to one-shot
+.B fan set
+/
+.B fan auto
+(and are refused while the daemon runs).
+.SH COMMANDS
+.TP
+.B probe
+Dump hardware capabilities: DMI, sensors, RAPL, NVIDIA, LEDs, ACPI/WMI, EC.
+.TP
+.BR monitor " [" \-i|--interval
+.IR SECONDS ]
+.RI [ \-n|--count
+.IR N ]
+Live monitor: temps, clocks, power, fans, GPU, battery. Runs until Ctrl-C
+unless
+.I --count
+is given.
+.TP
+.B fan dump
+Dump EC fan registers and cross-check against hwmon. Needs root plus the
+.B ec_sys
+module
+.RI ( modprobe\ ec_sys ).
+.TP
+.BR fan " watch [" \-i|--interval
+.IR SECONDS ]
+.RI [ \-n|--count
+.IR N ]
+Poll the EC fan map over time (read-only log for idle-vs-load comparison).
+.TP
+.BR fan " curve --temp " \fIC\fR " --duty " \fIPCT\fR
+Preview the reference auto-curve step for
+.IR C \(deC
+at current duty
+.IR PCT %.
+Pure computation, no hardware I/O.
+.TP
+.BR fan " set " \fIPCT\fR
+One-shot manual duty on both fans, clamped to the safe 40\(en100% range
+and verified against EC register 0xCE. Needs root.
+.TP
+.B fan auto
+Restore EC auto control on both fans. Needs root.
+.TP
+.B fan ping
+No-op root probe for GUI pre-auth at startup. Never touches the EC.
+.TP
+.B profile get
+Show the current axioo profile (Balanced|Entertainment|Performance),
+quiet-fan state, and power-profiles-daemon profile. Via
+.BR axiood .
+.TP
+.BR profile " set " \fINAME\fR
+Set profile:
+.BR Balanced ,
+.BR Entertainment ,
+or
+.BR Performance .
+Via
+.BR axiood .
+.TP
+.BR profile " quiet-fan " \fIACTION\fR
+Per-mode quiet-fan toggle, where
+.I ACTION
+is
+.BR on ,
+.BR off ,
+.BR toggle ,
+or
+.BR status .
+Via
+.BR axiood .
+.TP
+.B kbd status
+Show keyboard-backlight driver/LED presence and current state, with fix
+hints (needs the
+.B tuxedo_keyboard
+driver).
+.TP
+.B kbd get
+Print current brightness + RGB.
+.TP
+.B kbd brighter
+Raise brightness one step (for Fn-key bindings, e.g.
+.B XF86KbdBrightnessUp
+in Hyprland).
+.TP
+.B kbd dimmer
+Lower brightness one step (for
+.BR XF86KbdBrightnessDown ).
+.TP
+.BR kbd " set [" \-b|--brightness " \fIN\fR] [" \-\-rgb " \fIR,G,B\fR] [" \-\-preset " \fINAME\fR] [" \-\-dry-run ]
+Set brightness and/or color (static mode). Presets:
+.BR red ,
+.BR yellow ,
+.BR green ,
+.BR cyan ,
+.BR blue ,
+.BR white ,
+.BR off .
+.B --dry-run
+prints what would be written without writing.
+.TP
+.BR kbd " effect " \fINAME\fR " [" \-\-rgb " \fIR,G,B\fR] [" \-\-preset " \fINAME\fR] [" \-\-rear " \fIEFFECT\fR]"
+RGB effect:
+.BR static ,
+.BR breathing ,
+.BR wave ,
+.BR rainbow ,
+.BR cycle ,
+.BR aurora ,
+.BR twinkle ,
+.BR pulse ,
+.BR gradient ,
+.BR music ,
+.BR spectrum ,
+.BR reactive
+(Ctrl-C to stop).
+.B --rear
+selects an independent rear-exhaust animation on machines with 5 LED
+nodes;
+.B follow
+(the default) follows the main effect.
+.TP
+.B battery status
+Show battery + FlexiCharger thresholds + available steps.
+.TP
+.B battery get
+Print current charge thresholds (start/end).
+.TP
+.BR battery " set [" \-\-start " \fIN\fR] [" \-\-end " \fIN\fR]"
+Set FlexiCharger thresholds (requires root). Validated against the
+firmware's available list.
+.SH FILES
+.TP
+.I /sys/class/leds/rgb:kbd_backlight/
+Keyboard backlight sysfs nodes (writable for group
+.B video
+via the installed udev rule).
+.TP
+.I /sys/class/power_supply/BAT0/charge_control_*
+Battery charge thresholds.
+.SH SEE ALSO
+.BR axiood (8),
+.BR powerprofilesctl (1)
+.SH AUTHORS
+Axioo Control Center contributors. License: AGPL-3.0-or-later.

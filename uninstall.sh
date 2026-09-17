@@ -173,7 +173,8 @@ say "[B] aplikasi (user $HOME)"
 rm_one "dir install AppImage" "$HOME/.local/share/$APPID"
 rm_one "legacy ~/Applications" "$HOME"/Applications/Axioo-Control-Center-*.AppImage \
     "$HOME"/Applications/axioo-control-center-*.AppImage "$HOME"/Applications/*xioo*.AppImage
-rm_one "helper CLI" "$HOME/.local/bin/axioo-ctl"
+rm_one "helper CLI" "$HOME/.local/bin/axioo-ctl" "$HOME/.local/bin/axioo-center-autostart"
+rm_root "man page" /usr/share/man/man1/axioo-ctl.1
 rm_one "desktop entry" "$HOME/.local/share/applications/$APPID.desktop"
 rm_one "autostart login" "$HOME"/.config/autostart/*xioo*.desktop
 if [ -d "$HOME/.local/share/applications" ]; then
@@ -290,6 +291,7 @@ check "file daemon" /usr/bin/axiood /usr/local/bin/axiood \
     /usr/share/polkit-1/actions/com.axioo.Control.policy \
     /etc/udev/rules.d/99-axioo-kbd.rules /usr/lib/udev/rules.d/99-axioo-kbd.rules
 check "file aplikasi" "$HOME/.local/share/$APPID" "$HOME/.local/bin/axioo-ctl" \
+    "$HOME/.local/bin/axioo-center-autostart" /usr/share/man/man1/axioo-ctl.1 \
     "$HOME/.local/share/applications/$APPID.desktop" \
     "$HOME/.local/share/$TAURI_ID" "$HOME/.cache/$TAURI_ID" "$HOME/.config/$TAURI_ID"
 left_auto="$(find "$HOME/.config/autostart" -maxdepth 1 -iname '*xioo*.desktop' 2>/dev/null || true)"

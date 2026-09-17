@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# axioo-center-autostart — stable login entry for Axioo Control Center.
+#
+# Why a wrapper: AppImageLauncher moves/renames the AppImage on every
+# integrate/update (e.g. ~/.local/share/axioo-control-center/...AppImage
+# → ~/Applications/..._<hash>.AppImage), so a .desktop Exec that hardcodes
+# the AppImage path silently goes stale and systemd's
+# xdg-autostart-generator skips it ("executable does not exist").
+# This wrapper re-resolves the newest AppImage at every login.
+# The tauri-plugin-autostart toggle writes a raw space-containing Exec
+# which the generator also rejects — toggling it OFF/ON in Settings will
+# need this file re-applied (or the app rebuilt with wrapper-aware commands).
+set -u
+
+for d in "$HOME/Applications" "$HOME/.local/share/axioo-control-center"; do
+  match=$(ls -t "$d"/Axioo\ Control\ Center*.AppImage 2>/dev/null | head -n 1)
+  if [[ -n "${match:-}" && -x "$match" ]]; then
+    exec "$match" --minimized
+  fi
+done
+
+# Fallback: standalone release binary (bundled frontend, no vite needed).
+rel="$HOME/Projects/axioo-control-center/target/release/axioo-center"
+if [[ -x "$rel" ]]; then
+  exec "$rel" --minimized
+fi
+
+exit 1
