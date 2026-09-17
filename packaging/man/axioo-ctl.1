@@ -115,6 +115,12 @@ in Hyprland).
 Lower brightness one step (for
 .BR XF86KbdBrightnessDown ).
 .TP
+.B kbd restore
+Re-apply last saved color from
+.I /var/lib/axiood/kbd.json
+to all zones (called automatically by udev when the LED appears —
+earliest OS restore point, long before SDDM — and manually).
+.TP
 .BR kbd " set [" \-b|--brightness " \fIN\fR] [" \-\-rgb " \fIR,G,B\fR] [" \-\-preset " \fINAME\fR] [" \-\-dry-run ]
 Set brightness and/or color (static mode). Presets:
 .BR red ,

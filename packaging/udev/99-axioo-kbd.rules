@@ -4,3 +4,7 @@ SUBSYSTEM=="leds", ACTION=="add", KERNEL=="rgb:kbd_backlight*", RUN+="/bin/chgrp
 SUBSYSTEM=="leds", ACTION=="add", KERNEL=="rgb:kbd_backlight*", RUN+="/bin/chmod g+w /sys%p/brightness /sys%p/multi_intensity"
 # Fallback: generic kbd LEDs
 SUBSYSTEM=="leds", KERNEL=="*kbd*", GROUP="video", MODE="0664"
+# Restore warna terakhir saat driver LED muncul: titik paling awal di OS
+# (udev coldplug, jauh sebelum axiood/SDDM). Idempoten — sekali per node.
+# BIOS/bootloader tetap putih (default firmware, belum ada kode OS jalan).
+SUBSYSTEM=="leds", ACTION=="add", KERNEL=="rgb:kbd_backlight*", RUN+="/usr/bin/axioo-ctl kbd restore"

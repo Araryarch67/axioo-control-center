@@ -112,6 +112,9 @@ enum KbdCmd {
     Brighter,
     /// Lower brightness one step (for Fn-key bindings).
     Dimmer,
+    /// Re-apply last saved color from /var/lib/axiood/kbd.json (udev +
+    /// manual; earliest restore point, long before SDDM).
+    Restore,
     /// Set brightness and/or color (mode static).
     Set {
         /// Raw brightness value (clamped to the driver's max_brightness).
@@ -183,6 +186,7 @@ fn main() {
             KbdCmd::Get => kbd::get(),
             KbdCmd::Brighter => kbd::brighter(),
             KbdCmd::Dimmer => kbd::dimmer(),
+            KbdCmd::Restore => kbd::restore(),
             KbdCmd::Set {
                 brightness,
                 rgb,

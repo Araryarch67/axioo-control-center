@@ -179,6 +179,10 @@ _daemon_install_silent() {
     sudo rm -f /etc/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
+    # axioo-ctl sistem (udev restore butuh path absolut /usr/bin).
+    if [ -f "$HERE/target/release/axioo-ctl" ]; then
+        sudo install -Dm755 "$HERE/target/release/axioo-ctl" /usr/bin/axioo-ctl
+    fi
     sudo udevadm control --reload-rules || true
     sudo systemctl daemon-reload
     sudo systemctl enable --now axiood
@@ -198,6 +202,10 @@ if [ -f "$HERE/target/release/axiood" ]; then
         sudo rm -f /etc/systemd/system/axiood.service
         sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
         sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
+        # axioo-ctl sistem (udev restore butuh path absolut /usr/bin).
+        if [ -f "$HERE/target/release/axioo-ctl" ]; then
+            sudo install -Dm755 "$HERE/target/release/axioo-ctl" /usr/bin/axioo-ctl
+        fi
         sudo udevadm control --reload-rules 2>/dev/null || true
         sudo systemctl daemon-reload
         echo "enable & start axiood…"

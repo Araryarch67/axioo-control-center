@@ -13,6 +13,59 @@ use std::sync::{
 /// Path state boot-restore milik daemon (lihat `axiood/src/kbd_state.rs`).
 const KBD_STATE_PATH: &str = "/var/lib/axiood/kbd.json";
 
+/// `axioo-ctl kbd restore`: terapkan warna terakhir tersimpan ke SEMUA
+/// zona (dipakai udev saat LED muncul = titik paling awal di OS, jauh
+/// sebelum axiood/SDDM — plus bisa dipanggil manual). Idempoten:
+/// dipanggil sekali per node LED oleh udev tidak masalah.
+/// Keluar 0 bila diterapkan atau belum ada state (udev tak boleh error);
+/// keluar 1 hanya bila state ada tapi LED/driver tak ada.
+pub fn restore() {
+    let raw = match std::fs::read_to_string(KBD_STATE_PATH) {
+        Ok(r) => r,
+        Err(_) => {
+            println!("kbd restore: no saved state ({KBD_STATE_PATH} missing) — skipping");
+            return;
+        }
+    };
+    // Cermin format `axiood/src/kbd_state.rs` (sumber kanonis).
+    let v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("kbd restore: state corrupt ({e}) — skipping");
+            return;
+        }
+    };
+    let num = |k: &str| v.get(k).and_then(|x| x.as_u64());
+    let (brightness, r, g, b) = match (num("brightness"), num("r"), num("g"), num("b")) {
+        (Some(br), Some(r), Some(g), Some(b)) => (
+            br.min(255) as u32,
+            r.min(255) as u8,
+            g.min(255) as u8,
+            b.min(255) as u8,
+        ),
+        _ => {
+            eprintln!("kbd restore: state incomplete — skipping");
+            return;
+        }
+    };
+    let devs = kbd::discover();
+    if devs.is_empty() {
+        eprintln!("error: no keyboard-backlight LED found (see: axioo-ctl kbd status)");
+        std::process::exit(1);
+    }
+    let mut n = 0;
+    for d in &devs {
+        if kbd::set(d, brightness.min(d.max_brightness), (r, g, b)).is_ok() {
+            n += 1;
+        }
+    }
+    if n == 0 {
+        eprintln!("error: all LED writes failed");
+        std::process::exit(1);
+    }
+    println!("kbd restore: brightness={brightness} rgb={r},{g},{b} ({n} zones)");
+}
+
 /// Simpan warna terakhir agar ke-restore sebelum SDDM saat boot.
 /// Best-effort: via D-Bus daemon bila jalan (bisa sebagai user), langsung
 /// ke file bila root + daemon mati. Gagal persist = peringatan saja,
