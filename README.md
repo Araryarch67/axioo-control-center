@@ -19,6 +19,12 @@ Rust replacement for the Windows-only Clevo Control Center.**
 Arch Linux, one command (no sudo — you will be asked when needed):
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/Araryarch67/axioo-control-center/main/install.sh | bash
+```
+
+From a local checkout instead:
+
+```sh
 ./setup.sh
 ```
 
