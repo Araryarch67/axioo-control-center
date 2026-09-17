@@ -16,9 +16,10 @@
 #      (/usr/bin + /usr/local/bin), unit systemd (/etc + /usr/lib + /run),
 #      conf D-Bus system, policy polkit, udev rules (/etc + /usr/lib);
 #      lalu daemon-reload + reload/trigger udev (+ reload dbus bila bisa).
-#   B. Aplikasi (user): seluruh ~/.local/share/axioo-control-center,
+#   B. Aplikasi (user): stop service user + kill GUI/tray yang jalan,
+#      seluruh ~/.local/share/axioo-control-center,
 #      sisa ~/Applications (legacy), ~/.local/bin/axioo-ctl, desktop entry
-#      *axioo*, ikon *axioo*, data/cache/config aplikasi
+#      *axioo*, ikon *axioo*, unit user systemd, data/cache/config aplikasi
 #      (com.axioo.ControlCenter); refresh desktop-db + icon cache.
 #   C. Repo            : dist/*.AppImage + *.zsync + AppDir + icon.png
 #      (generate ulang via script.sh), .tools/ (kecuali KEEP_CACHE=1),
@@ -148,6 +149,7 @@ fi
 # Binary + unit + bus + polkit + udev — sikat SEMUA lokasi yang pernah dipakai
 # installer mana pun (setup.sh → /usr/lib, install-system.sh → /etc).
 rm_root "binary axiood" /usr/bin/axiood /usr/local/bin/axiood
+rm_root "binary axioo-ctl sistem (udev restore)" /usr/bin/axioo-ctl /usr/local/bin/axioo-ctl
 rm_root "unit systemd" /etc/systemd/system/axiood.service \
     /usr/lib/systemd/system/axiood.service /run/systemd/system/axiood.service
 rm_root "conf D-Bus" /etc/dbus-1/system.d/com.axioo.Control.conf
@@ -170,6 +172,28 @@ say "  - systemd + udev di-reload"
 
 # ---------- B. aplikasi (user) ----------
 say "[B] aplikasi (user $HOME)"
+# Matikan GUI DULU sebelum file-nya dihapus (kalau tidak, ikon tray tetap
+# hidup dari binary yang sudah terhapus). Urutan penting: stop service
+# dulu agar Restart=on-failure tidak menghidupkan lagi proses yang di-pkill.
+if have systemctl; then
+    systemctl --user stop axioo-center.service 2>/dev/null || true
+    systemctl --user disable axioo-center.service 2>/dev/null || true
+    say "  - service user axioo-center di-stop + disable"
+fi
+if have pkill; then
+    pkill -x axioo-center 2>/dev/null || true
+    pkill -f 'Axioo Control Center.*\.AppImage' 2>/dev/null || true
+    sleep 1
+    if pgrep -x axioo-center >/dev/null 2>&1 \
+        || pgrep -f 'Axioo Control Center.*\.AppImage' >/dev/null 2>&1; then
+        pkill -9 -x axioo-center 2>/dev/null || true
+        pkill -9 -f 'Axioo Control Center.*\.AppImage' 2>/dev/null || true
+    fi
+    say "  - proses GUI/tray di-kill"
+fi
+rm_one "unit user systemd" "$HOME/.config/systemd/user/axioo-center.service" \
+    "$HOME/.config/systemd/user/graphical-session.target.wants/axioo-center.service"
+if have systemctl; then systemctl --user daemon-reload 2>/dev/null || true; fi
 rm_one "dir install AppImage" "$HOME/.local/share/$APPID"
 rm_one "legacy ~/Applications" "$HOME"/Applications/Axioo-Control-Center-*.AppImage \
     "$HOME"/Applications/axioo-control-center-*.AppImage "$HOME"/Applications/*xioo*.AppImage
@@ -285,7 +309,15 @@ if have systemctl; then
 fi
 if have pgrep && pgrep -x axiood >/dev/null 2>&1; then LEFTOVER=1; say "  SISA proses axiood masih hidup";
 else say "  OK  tidak ada proses axiood"; fi
-check "file daemon" /usr/bin/axiood /usr/local/bin/axiood \
+if have systemctl && systemctl --user is-active --quiet axioo-center.service 2>/dev/null; then
+    LEFTOVER=1; say "  SISA service user: axioo-center masih ACTIVE";
+else say "  OK  service user axioo-center tidak jalan"; fi
+if have pgrep && { pgrep -x axioo-center >/dev/null 2>&1 || pgrep -f 'Axioo Control Center.*\.AppImage' >/dev/null 2>&1; }; then
+    LEFTOVER=1; say "  SISA proses GUI/tray masih hidup";
+else say "  OK  tidak ada proses GUI/tray"; fi
+check "unit user" "$HOME/.config/systemd/user/axioo-center.service" \
+    "$HOME/.config/systemd/user/graphical-session.target.wants/axioo-center.service"
+check "file daemon" /usr/bin/axiood /usr/local/bin/axiood /usr/bin/axioo-ctl /usr/local/bin/axioo-ctl \
     /etc/systemd/system/axiood.service /usr/lib/systemd/system/axiood.service \
     /etc/dbus-1/system.d/com.axioo.Control.conf \
     /usr/share/polkit-1/actions/com.axioo.Control.policy \
