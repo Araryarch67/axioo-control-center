@@ -115,6 +115,11 @@ plus [novacustom](https://novacustom.com/clevo-keyboard-backlight-control-for-li
 Daemon architecture follows [tuxedo-rs](https://github.com/AaronErhardt/tuxedo-rs).
 Thanks everyone 🙏
 
+## Support
+
+If this project saves you a reboot into Windows, consider tipping:
+[https://tako.id/ararya/gift](https://tako.id/ararya/gift) ☕
+
 ## License
 
 [GNU Affero General Public License v3.0 or later](LICENSE).
