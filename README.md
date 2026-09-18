@@ -97,10 +97,12 @@ firmware may differ slightly):
 ## Details
 
 * How it works + safety contract: [`AGENTS.md`](AGENTS.md)
-* EC fan protocol: [`docs/ec-fan-protocol.md`](docs/ec-fan-protocol.md)
-* Backlight + quirk: [`docs/kbd-backlight.md`](docs/kbd-backlight.md)
+* EC fan protocol + write contract: [`docs/ec-fan-protocol.md`](docs/ec-fan-protocol.md)
+* Daemon, profiles, PPD sync, D-Bus API: [`docs/daemon.md`](docs/daemon.md)
+* Backlight + quirk + restore chain: [`docs/kbd-backlight.md`](docs/kbd-backlight.md)
 * Why there is no per-key RGB: [`docs/per-key-rgb.md`](docs/per-key-rgb.md)
-* AUR/systemd/udev packaging: [`docs/packaging.md`](docs/packaging.md)
+* AUR/systemd/udev packaging + autostart: [`docs/packaging.md`](docs/packaging.md)
+* CLI reference offline: `man axioo-ctl` (`packaging/man/axioo-ctl.1`)
 
 ## Credits
 

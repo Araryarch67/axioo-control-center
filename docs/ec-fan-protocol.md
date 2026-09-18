@@ -5,20 +5,19 @@ Sumber: [hajilok/clevo-axioo-dual-fan-linux](https://github.com/hajilok/clevo-ax
 `tuxedo-fan-control` (`native/ec_access.cc`).
 Terverifikasi di: P7xxDM, N1xxED, NH5x_7x, ND/NE, **Axioo Pongo 725**.
 
-> ⚠️ Status di Pongo Studio X (2025, X560WNR-SU9): **TERVALIDASI read-only
-> (2026-09-13, satu sampel via `axioo-ctl fan dump`)**: `0x07`=61C vs
+> ⚠️ Status di Pongo Studio X (2025, X560WNR-SU9): **TERVALIDASI
+> (2026-09-13, 5+ sampel idle COCOK)**: `0x07`=61C vs
 > coretemp package 64.0C (selisih 3C), `0xD0/0xD1`→2422 RPM dan
 > `0xD2/0xD3`→2015 RPM **persis sama** dengan kedua node `acpi_fan`
 > hwmon. GPU temp `0xCD`=52C (dGPU bangun, bukan 0).
-> EC generasi baru ini ternyata memakai peta yang sama.
-> Tinggal konfirmasi satu sampel saat load (RPM ikut naik) —
-> lihat `fan watch` di bawah.
-> Aturan safety (2026-09-13, direvisi): tulis EC satu-kali (one-shot)
-> via `axio_lib::fan_ctrl` **diperbolehkan** — peta tervalidasi read-only
-> idle (5+ sampel COCOK) dan `fan set 100` terkonfirmasi bekerja via CLI.
-> Syarat: root (pkexec/sudo), clamp 40–100%, tulis kedua fan, verify
-> via cermin `0xCE`. Loop kurva kontinu tetap HANYA milik `axiood`
-> di masa depan, tidak pernah dari CLI/GUI langsung.
+> EC generasi baru ini memakai peta yang sama.
+> Tulis one-shot via `axio_lib::fan_ctrl` **TERBUKTI** (`fan set 100`
+> via CLI): clamp 40–100%, tulis kedua fan, verify cermin `0xCE`.
+> Aturan safety (direvisi): one-shot dari CLI/GUI **diperbolehkan hanya
+> bila daemon mati** — bila `axiood` jalan, tulis langsung DITOLAK dan
+> semua kontrol kipas lewat D-Bus daemon (bagian G).
+> Loop kurva kontinu HANYA milik `axiood`, tidak pernah dari CLI/GUI
+> langsung.
 
 ## A. Akses I/O
 
@@ -107,3 +106,26 @@ axioo-ctl (user) / axioo-control-center GUI (user, Tauri)
    Kalau tidak → cari register yang berubah
    saat kipas berputar (bandingkan dump idle vs load;
    kandidat alternatif `0xD4/0xD5` ikut dicetak `fan dump`).
+
+## G. Kontrak tulis: one-shot vs loop daemon
+
+Aturan kepemilikan EC (lihat juga `AGENTS.md` + `docs/daemon.md`):
+
+| Jalur | Kapan boleh | Syarat |
+|---|---|---|
+| `axioo-ctl fan set PCT` / `fan auto` (one-shot via `fan_ctrl`) | **hanya bila `axiood` mati** | root (sudo/pkexec), clamp 40–100% (`MIN_FAN_DUTY_PCT`/`MAX_FAN_DUTY_PCT` di `axioo-lib/src/fan.rs`), tulis fan `0x01` **dan** `0x02`, verify cermin `0xCE` |
+| `fan_set_manual` / `fan_set_auto` di GUI Tauri (one-shot langsung) | **DITOLAK bila daemon reachable** — backend cek `daemon_reachable()` dulu | sama seperti di atas (re-validasi server-side; slider JS untrusted) |
+| Loop kurva kontinu (`tick` tiap 2 dtk, hysteresis `auto_duty_step`) | **hanya `axiood`** (root, via D-Bus `SetFanManual`/`SetFanEcAuto`/`ClearFanOverride`) | GUI/CLI tak pernah tulis EC langsung selama daemon jalan |
+| `axioo-ctl fan ping` | selalu (no-op probe root buat GUI pre-auth) | **tidak pernah menyentuh EC** |
+
+Mode kipas milik daemon (sumber kebenaran: `DaemonState::fan_mode()`):
+
+- `ec_auto` (default) — `set_auto()` satu-kali, lalu diam; firmware yang
+  pegang. RAPL/PPD tetap ikut profil.
+- `curve` — loop daemon: `temp = max(cpu EC 0x07, gpu EC 0xCD`,
+  fallback coretemp), step via `auto_duty_step` + hysteresis; `quiet-fan`
+  = pin 40% di semua suhu. Hanya tulis bila duty berubah.
+- `manual` — kunci duty pilihan user (clamp 40–100% di setter D-Bus).
+
+Kurva tampil di GUI dibaca dari D-Bus `GetCurve` (jangan duplikasi tabel
+di klien): kosong bila `ec_auto`, garis datar bila manual.

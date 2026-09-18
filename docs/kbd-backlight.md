@@ -91,17 +91,98 @@ ke waktu (efek Wave/Rainbow kita sudah covers ini).
    `studiox-numpad-ec.patch` mendaftarkan node ke-4 yang menulis lewat
    jalur itu (alat System76 dipakai sebagai referensi yang sudah
    terbukti di produksi).
-3. **Tulis butuh root** (`sudo axioo-ctl kbd set ...`) sampai daemon
-   `axiood` ada. Selalu coba `--dry-run` dulu.
-4. Skala brightness JANGAN diasumsikan 0–255 — baca `max_brightness`
+4. **Tulis butuh root** (`sudo axioo-ctl kbd set ...`) sampai udev rule
+   terpasang; dengan `packaging/udev/99-axioo-kbd.rules` (grup `video`)
+   user biasa bisa tulis sysfs tanpa sudo harian. Selalu coba
+   `--dry-run` dulu.
+5. Skala brightness JANGAN diasumsikan 0–255 — baca `max_brightness`
    dari `axioo-ctl kbd status` dan skala dari situ.
+
+## Efek animasi (12 efek + rear independen)
+
+Efek jalan sebagai **thread userspace** (60ms tick) di proses GUI/CLI —
+privilege sama seperti `kbd set` (sysfs, tak perlu root tambahan).
+Satu thread menulis semua node; start baru mematikan yang lama.
+`static` = warna diam (hentikan animasi, kembalikan warna dasar).
+
+| Efek | Perilaku |
+|---|---|
+| `static` | warna diam (preset/RGB) |
+| `breathing` | fade in/out warna dasar |
+| `wave` | hue mengalir kiri → numpad 40°/s |
+| `rainbow` | semua zona sinkron 45°/s |
+| `cycle` | 6 preset bergantian dengan blend |
+| `aurora` | pastel wave lambat 15°/s |
+| `twinkle` | sparkle acak tiap 0.4s |
+| `pulse` | heartbeat ganda |
+| `gradient` | rainbow tetap per zona |
+| `music` | beat pulsing (simulasi, cpal-ready) |
+| `spectrum` | low/mid/high per zona (simulasi) |
+| `reactive` | flash putih (placeholder) |
+
+Rear exhaust bisa punya efek sendiri (butuh 5 node; bila <5, `rear`
+diabaikan = follow):
+
+```sh
+sudo axioo-ctl kbd effect wave --rgb 0,128,255 --rear rainbow
+axioo-ctl kbd effect static --rear wave   # keyboard diam, rear jalan
+```
+
+Saat `static` + rear independen: warna keyboard per-zona **tidak
+disentuh**, hanya rear yang dianimasikan dan di-restore saat stop.
+Kecepatan: `--speed 0.1–4.0` (CLI) / slider GUI (1.0 = normal).
+
+## Rantai persist + restore (5 lapis)
+
+Firmware selalu reset backlight ke **putih tiap reboot**. Warna terakhir
+dipertahankan lewat 5 lapis (urutan waktu saat boot → login):
+
+1. **udev (paling awal).** `99-axioo-kbd.rules` memanggil
+   `axioo-ctl kbd restore` tiap node `rgb:kbd_backlight*` muncul
+   (coldplug, jauh sebelum SDDM). Idempoten. BIOS/bootloader tetap
+   putih — belum ada kode OS yang jalan.
+2. **axiood pre-login.** `SetKbd` (via D-Bus, dari GUI/CLI sebagai user)
+   menyimpan ke `/var/lib/axiood/kbd.json`
+   (`{brightness,r,g,b,effect,rear,speed}`); daemon (root, system
+   service sebelum display-manager) me-restore warna dasar saat start +
+   retry 10× tiap 3 dtk bila driver telat dimuat. Hanya warna dasar
+   statis — cukup untuk SDDM; animasi efek jalan lagi setelah login.
+   `axioo-ctl kbd set` sebagai root ikut menyimpan ke file yang sama.
+3. **GUI boot.** `maintainKbd` menulis-balik warna tersimpan **sebelum**
+   `hydrateKbd` tiap tick (hardware reset tiap reboot; tanpa ini tick-1
+   async menimpa warna tersimpan dengan bacaan hardware yang putih).
+4. **Sesi login.** `hydrateKbd` membaca snapshot hardware → store
+   (`kbdHex`/`kbdBright`/`kbdTouched`, persist zustand); `kbdTouched`
+   menandai user sudah memilih warna (poll restore cepat sampai restore
+   sesi selesai, anti-race).
+5. **Follow wallpaper.** Mode follow-wallpaper (matugen
+   `~/.cache/ryoku/colors.json`) jalan tiap tick walau tab Keyboard tak
+   dibuka; revisi palet = mtime file (1 stat syscall per snapshot) +
+   watcher event `matugen-changed` saat hidden.
+
+## Fn-keys brightness (Hyprland)
+
+`tuxedo_keyboard` emit `KEY_KBDILLUM{UP,DOWN,TOGGLE}`; subcommand
+`kbd brighter`/`kbd dimmer` naik/turun satu step (buat binding):
+
+```
+bind = , XF86KbdBrightnessUp,   exec, axioo-ctl kbd brighter
+bind = , XF86KbdBrightnessDown, exec, axioo-ctl kbd dimmer
+```
+
+(Binding ditunda per permintaan user — siap ditempel ke `hyprland.conf`.)
 
 ## Contoh pakai
 
 ```sh
 axioo-ctl kbd status
+axioo-ctl kbd get
 axioo-ctl kbd set --preset blue --dry-run
 sudo axioo-ctl kbd set --preset blue --brightness 200
 sudo axioo-ctl kbd set --rgb 255,128,0
 sudo axioo-ctl kbd set --preset off
+axioo-ctl kbd brighter          # Fn-key: naik satu step
+axioo-ctl kbd dimmer            # Fn-key: turun satu step
+axioo-ctl kbd restore           # tulis-ulang warna tersimpan (udev/manual)
+sudo axioo-ctl kbd effect wave --rgb 0,128,255 --rear rainbow  # Ctrl-C berhenti
 ```

@@ -39,28 +39,91 @@ memuat versi.
 
 ## udev
 
-`packaging/udev/99-axioo-kbd.rules` — `rgb:kbd_backlight*` jadi `g+w` group `video` (hilangkan sudo harian untuk kbd backlight). Reload: `sudo udevadm control --reload-rules`.
+`packaging/udev/99-axioo-kbd.rules`:
+
+- `rgb:kbd_backlight*` jadi `g+w` grup `video` (hilangkan sudo harian
+  untuk kbd backlight). Reload: `sudo udevadm control --reload-rules`.
+- Restore paling awal: `ACTION==add` → `/usr/bin/axioo-ctl kbd restore`
+  (baca `/var/lib/axiood/kbd.json`, terapkan semua zona, idempoten).
+  `setup.sh` memasang `axioo-ctl` ke `/usr/bin` agar rule ini valid.
+  Detail rantai restore: `docs/kbd-backlight.md`.
 
 ## Upstream
 
-Quirk `0x17` Studio X ada di `packaging/clevo-drivers-axioo/studiox-kbd-quirk.patch` — setelah terbukti stabil, kirim patch ke `nick42d/clevo-drivers` (AUR yang dipakai). Target: DMI quirk board, bukan override tipe yang sudah dikenal driver.
+Quirk `0x17` Studio X ada di `packaging/clevo-drivers-axioo/studiox-kbd-quirk.patch` — setelah terbukti stabil, kirim patch ke `nick42d/clevo-drivers` (AUR yang dipakai). Target: DMI quirk board, bukan override tipe yang sudah dikenal driver. Panduan: `packaging/clevo-drivers-axioo/UPSTREAM.md`.
 
-## Autostart login + tray
+## axiood.service (system, root)
+
+`packaging/axiood.service` → `/usr/lib/systemd/system/axiood.service`,
+`WantedBy=multi-user.target`, `Restart=on-failure`.
+**Sengaja TANPA `After=` ke `power-profiles-daemon.service`:** PPD
+upstream punya `After=multi-user.target`, jadi `After=PPD` menutup
+ordering-cycle (axiood→PPD→multi-user→axiood) dan systemd me-delete job
+start tiap boot ("Found ordering cycle", enabled tapi inactive).
+Daemon tahan tanpa PPD (fallback Balanced + polling D-Bus tiap 3 dtk),
+jadi dependensi ordering keras tak diperlukan.
+Butuh `CAP_SYS_RAWIO` (port EC `0x62`/`0x66`) + powercap sysfs + debugfs
+`ec_sys`. Detail daemon/profil/D-Bus: `docs/daemon.md`.
+
+## Autostart login + tray (systemd user unit = utama)
 
 App (Tauri, jalan sebagai user) punya tray icon: klik kiri tampil/sembunyi,
 klik kanan menu (Tampilkan · Start saat login · Keluar). Tombol ×/Alt+F4
-menyembunyikan ke tray, bukan keluar.
+menyembunyikan ke tray, bukan keluar. Single-instance ala Steam:
+peluncuran kedua mati sendiri dan memunculkan jendela instance pertama
+(jadi launcher + autostart boleh berbagi wrapper tanpa dobel tray).
 
-"Start saat login" (aktif default via `setup.sh`; toggle di tab Settings,
-juga ada di menu tray) memakai file `~/.config/autostart/axioo-center.desktop`
-via `tauri-plugin-autostart` dengan argumen `--minimized` (mulai sembunyi
-di tray). `is_enabled` plugin = cek existensi file, jadi toggle in-app
-selalu sinkron dengan file setup.sh. Catatan:
+"Start saat login" (toggle tab Settings + menu tray, aktif default via
+`setup.sh`) memakai **systemd user unit** sebagai mekanisme utama —
+`~/.config/systemd/user/axioo-center.service` (+ symlink wants
+`graphical-session.target.wants/`), `WantedBy`+`After=graphical-session.target`,
+`ExecStart=%h/.local/bin/axioo-center-autostart --minimized`.
+User manager yang start — **tanpa setup di WM** (tak perlu `exec-once`
+Hyprland / `add-wants xdg-desktop-autostart` manual). Entry XDG
+`~/.config/autostart/axioo-center.desktop` tetap ditulis sebagai kompat
+DE lain. Backend menulis keduanya + `daemon-reload`; toggle ON bila
+salah satunya ada. Sumber tunggal wrapper + unit di
+`packaging/autostart/` + `packaging/systemd-user/`, di-embed ke binary
+via `include_str!` (toggle tetap jalan walau repo tak ada).
+
+Kenapa bukan plugin autostart / XDG saja:
+
+- `tauri-plugin-autostart` menulis `Exec=<path AppImage mentah ber-spasi>`
+  yang DITOLAK `systemd-xdg-autostart-generator` ("executable does not
+  exist") — toggle ON = entry mati. (Sudah dilepas, diganti penulis
+  sendiri di backend.)
+- **Launcher anti-basi:** AppImageLauncher memindah/rename AppImage tiap
+  integrate/update, jadi Exec yang hardcode path AppImage diam-diam basi
+  (klik launcher tak terjadi apa-apa; generator skip "executable does
+  not exist"). Exec launcher = wrapper **tanpa flag** (jendela tampil),
+  Exec boot = wrapper **`--minimized`** (sembunyi ke tray); wrapper
+  arg-aware me-resolve AppImage terbaru tiap run
+  (`~/Applications` lalu `~/.local/share/axioo-control-center`,
+  fallback binary release).
+- **Anti-duplikat:** wrapper export `APPIMAGELAUNCHER_DISABLE=1` (satu
+  choke point — dialog "integrate?" tak lagi blokir boot-to-tray) +
+  backend/toggle menghapus entry warisan plugin
+  (`appimagekit_*-Axioo_Control_Center.desktop`).
+- **Tray-tenang:** warning kosmetik `libayatana-appindicator is
+  deprecated` (dari library sistem, bukan bug) dibungkam via filter
+  stderr di wrapper — pesan lain lolos.
+- XDG saja tak cukup di Hyprland: `xdg-desktop-autostart.target`
+  inactive + ordering-cycle melempar semua job autostart (catatan
+  2026-09-16; unit systemd kini utama, symlink manual sesi itu boleh
+  dicabut setelah unit aktif).
+
+Catatan:
 
 - Nyalakan toggle dari AppImage terinstall (bukan `./dev.sh`) agar login
-  menjalankan binary yang benar — plugin mencatat executable saat toggle on.
+  menjalankan binary yang benar.
 - Tray butuh host StatusNotifier: GNOME (extension), KDE (bawaan),
   Hyprland (mis. waybar `tray` module).
-- Hyprland tidak memproses XDG autostart sendiri — tambah
-  `exec-once = dex --autostart` (paket `dex`) atau kontak manual.
-- `uninstall.sh` menghapus file autostart + verifikasi bersih.
+- `uninstall.sh` mematikan GUI juga: stop+disable service user +
+  kill proses tray/AppImage + hapus unit user (urutan stop-dulu agar
+  `Restart=on-failure` tak menghidupkan lagi) + verifikasi bersih.
+
+## Man pages
+
+`packaging/man/axioo-ctl.1` — referensi CLI lengkap
+(`probe`, `monitor`, `fan`, `profile`, `kbd`, `battery`). Terpasang via
+PKGBUILD/`setup.sh`; baca offline: `man axioo-ctl`.
