@@ -7,7 +7,8 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 [![Rust](https://img.shields.io/badge/built_with-Rust-orange.svg)]()
-![Tested](https://img.shields.io/badge/tested-Pongo_Studio_X_2025-success.svg)
+[![Tested](https://img.shields.io/badge/tested-Pongo_Studio_X_2025-success.svg)]()
+[![Support](https://img.shields.io/badge/support-Tako.id-FF5E8A.svg)](https://tako.id/ararya/gift)
 
 **Linux hardware control for Axioo laptops (Clevo-based) — a from-scratch
 Rust replacement for the Windows-only Clevo Control Center.**
@@ -117,8 +118,9 @@ Thanks everyone 🙏
 
 ## Support
 
-If this project saves you a reboot into Windows, consider tipping:
-[https://tako.id/ararya/gift](https://tako.id/ararya/gift) ☕
+If this project saves you a reboot into Windows:
+
+[![Support me on Tako](https://img.shields.io/badge/Support_me-Tako.id-FF5E8A?style=for-the-badge&logo=buymeacoffee&logoColor=white)](https://tako.id/ararya/gift)
 
 ## License
 
