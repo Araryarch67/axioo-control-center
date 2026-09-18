@@ -78,13 +78,13 @@ fn ppd_set(conn: &Connection, profile: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Map axioo 3-mode → PPD (sama seperti daemon).
-/// Legacy `quiet`/`power-saver` → `power-saver` (daemon: Balanced+quiet).
+/// Map axioo 3-mode → PPD (sama seperti daemon, 1-ke-1).
+/// Legacy `quiet` → `power-saver` (daemon: Balanced+quiet).
 fn to_ppd(name: &str) -> Option<&'static str> {
     match name.to_ascii_lowercase().as_str() {
-        "balanced" => Some("balanced"),
-        "entertainment" | "performance" | "perf" => Some("performance"),
-        "quiet" | "power-saver" | "powersaver" => Some("power-saver"),
+        "balanced" | "power-saver" | "powersaver" | "quiet" => Some("power-saver"),
+        "entertainment" | "ent" => Some("balanced"),
+        "performance" | "perf" => Some("performance"),
         _ => None,
     }
 }

@@ -19,6 +19,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zbus = { version = "5", features = ["blocking"] }
 tauri-plugin-single-instance = "2"
+# File-watcher event-driven: colors.json → event "matugen-changed"
+# (frontend hidden tak perlu poll cepat; tanpa ubah perilaku visible).
+notify = "8"
 
 [features]
 default = ["custom-protocol"]

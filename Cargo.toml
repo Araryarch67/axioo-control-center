@@ -1,3 +1,9 @@
 [workspace]
 members = ["axioo-lib", "axioo-ctl", "axiood", "tauri-app/src-tauri"]
 resolver = "2"
+
+# Minim-risiko: hanya buang simbol debug + LTO tipis. Tanpa ubah kode,
+# tanpa ubah opt-level/panic (perilaku runtime identik, biner lebih kecil).
+[profile.release]
+strip = true
+lto = "thin"

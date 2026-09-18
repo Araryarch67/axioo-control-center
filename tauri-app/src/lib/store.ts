@@ -78,6 +78,34 @@ interface AppStore {
 }
 
 let pollTimer: number | undefined;
+/** Interval aktif (tampil 1 dtk; hidden 5/30 dtk sesuai status restore). */
+let pollMs = 1000;
+/** Tick sekali jalan (dipicu juga oleh event "matugen-changed"). */
+let pollNowFn: (() => void) | undefined;
+let visHooked = false;
+const POLL_VISIBLE_MS = 1000;
+/** Hidden + restore LED masih tertunda (udev telat): kejar cepat.
+ *  Setelah restored → turun ke SAFETY. */
+const POLL_HIDDEN_RESTORE_MS = 5000;
+/** Hidden steady-state: jaring pengaman saja (0.4 IPC/menit, -99% vs 1 dtk).
+ *  Follow-wallpaper real-time via event backend, bukan interval. */
+const POLL_HIDDEN_SAFETY_MS = 30000;
+
+function isHiddenNow(): boolean {
+  try {
+    if (typeof document !== "undefined" && document.hidden) return true;
+  } catch { /* abaikan */ }
+  return false;
+}
+
+/** Interval hidden sesuai status restore LED (butuh store → lazy). */
+function hiddenMs(): number {
+  try {
+    const s = useStore.getState();
+    if (s.kbdTouched && !s.kbdRestored) return POLL_HIDDEN_RESTORE_MS;
+  } catch { /* abaikan */ }
+  return POLL_HIDDEN_SAFETY_MS;
+}
 
 const LEGACY_TAB = "axioo.tab";
 const LEGACY_THEME = "axioo.theme";
@@ -127,6 +155,11 @@ export const useStore = create<AppStore>()(
       startPolling: () => {
         if (pollTimer !== undefined) return;
         let fails = 0;
+        const arm = (ms: number) => {
+          pollMs = ms;
+          if (pollTimer !== undefined) window.clearInterval(pollTimer);
+          pollTimer = window.setInterval(() => void tick(), ms);
+        };
         const tick = async () => {
           try {
             const s = await api.snapshot();
@@ -140,6 +173,8 @@ export const useStore = create<AppStore>()(
               set({ fanCurve: s.profile.curve });
             }
             set({ snap: s });
+            // Restore baru sukses saat hidden → turun ke safety net.
+            if (isHiddenNow() && pollMs !== hiddenMs()) arm(hiddenMs());
           } catch {
             fails++;
             if (fails === 2) {
@@ -147,14 +182,54 @@ export const useStore = create<AppStore>()(
             }
           }
         };
+        pollNowFn = () => void tick();
+        const rearmForVisibility = (hidden: boolean, immediate: boolean) => {
+          if (pollTimer === undefined) return;
+          // stopPolling sudah dipanggil (unmount) → jangan hidupkan lagi.
+          arm(hidden ? hiddenMs() : POLL_VISIBLE_MS);
+          if (immediate && !hidden) void tick();
+        };
+        if (!visHooked) {
+          visHooked = true;
+          try {
+            document.addEventListener("visibilitychange", () => {
+              rearmForVisibility(isHiddenNow(), true);
+            });
+            // Fallback: hide() Tauri di sebagian WebKit tak memicu
+            // visibilitychange — blur/focus menutup celahnya.
+            window.addEventListener("blur", () => rearmForVisibility(true, false));
+            window.addEventListener("focus", () => rearmForVisibility(false, true));
+          } catch { /* abaikan (SSR/tests) */ }
+          // Sinyal paling akurat di Tauri: fokus window (hide tray = unfocused).
+          void (async () => {
+            try {
+              const { getCurrentWindow } = await import("@tauri-apps/api/window");
+              await getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+                rearmForVisibility(!focused, focused);
+              });
+            } catch { /* mode browser — cukup listener DOM */ }
+          })();
+          // Event-driven backend (watch colors.json): wallpaper ganti saat
+          // hidden → tick segera (follow real-time). Saat tampil, poll 1 dtk
+          // sudah mencakupnya — lewati agar tak dobel IPC.
+          void (async () => {
+            try {
+              const { listen } = await import("@tauri-apps/api/event");
+              await listen<number>("matugen-changed", () => {
+                if (pollTimer !== undefined && isHiddenNow()) pollNowFn?.();
+              });
+            } catch { /* backend lama/browser — safety poll tetap jalan */ }
+          })();
+        }
         tick();
-        pollTimer = window.setInterval(tick, 1000);
+        arm(isHiddenNow() ? hiddenMs() : POLL_VISIBLE_MS);
       },
       stopPolling: () => {
         if (pollTimer !== undefined) {
           window.clearInterval(pollTimer);
           pollTimer = undefined;
         }
+        pollNowFn = undefined;
       },
       toast: null,
       notice: (text, error) => set({ toast: { text, error } }),

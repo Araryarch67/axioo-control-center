@@ -485,6 +485,12 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
     let last = 0;
     const t0 = performance.now();
     const loop = (now: number) => {
+      // Hidden ke tray: jangan bakar CPU/GC — backend thread tetap jalan,
+      // preview dilanjut saat window tampil lagi (fase dihitung dari t0).
+      if (typeof document !== "undefined" && document.hidden) {
+        raf = requestAnimationFrame(loop);
+        return;
+      }
       if (now - last > 80) {
         last = now;
         setAnimT((now - t0) / 1000);

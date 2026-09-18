@@ -103,13 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let flavor = ppd::detect_flavor(&conn).await;
     let (ppd_current, _) = ppd::get_active_profile(&conn)
         .await
-        .unwrap_or(("balanced".to_string(), flavor));
+        .unwrap_or(("power-saver".to_string(), flavor));
     println!("axiood: initial PPD '{ppd_current}' (flavor {flavor:?})");
 
     let (initial, initial_quiet) = match profile_override.as_deref() {
-        Some(p) if p.eq_ignore_ascii_case("quiet") || p.eq_ignore_ascii_case("power-saver") => {
-            (AxiooProfile::Balanced, true)
-        }
+        Some(p) if p.eq_ignore_ascii_case("quiet") => (AxiooProfile::Balanced, true),
         Some(p) => match AxiooProfile::parse(p) {
             Some(prof) => (prof, false),
             None => {

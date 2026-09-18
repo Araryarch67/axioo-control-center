@@ -1,15 +1,14 @@
 //! Axioo profiles: 3 power modes + per-mode `quiet-fan` toggle.
 //!
-//! - Balanced     <-> PPD `balanced`     (RAPL 44/120W)
-//! - Entertainment <-> PPD `performance` (RAPL 44/160W, kurva medium)
-//! - Performance  <-> PPD `performance` (RAPL 44/160W, kurva agresif)
+//! Two-way sync dengan PPD itu 1-ke-1:
+//! - Balanced      <-> PPD `power-saver`  (RAPL 44/120W)
+//! - Entertainment <-> PPD `balanced`     (RAPL 44/160W, kurva medium)
+//! - Performance   <-> PPD `performance`  (RAPL 44/160W, kurva agresif)
 //!
 //! `quiet_fan` murni opsi kipas: tiap mode punya varian kurva quiet yang
 //! turun satu tingkat (Performance+quiet = kurva Entertainment normal,
 //! Entertainment+quiet = kurva Balanced normal, Balanced+quiet = kurva
 //! quiet khusus). Tidak menyentuh PPD/RAPL.
-//!
-//! Kompat: PPD `power-saver` yang masuk dipetakan ke Balanced+quiet.
 
 use axioo_lib::fan::REFERENCE_CURVE;
 
@@ -30,11 +29,13 @@ impl AxiooProfile {
         }
     }
 
-    /// Parse a profile name. Legacy `"quiet"`/`"power-saver"` return `None`
-    /// (callers map them to Balanced + `quiet_fan=true`).
+    /// Parse a profile name. Legacy `"quiet"` return `None`
+    /// (callers map it to Balanced + `quiet_fan=true`).
+    /// `"power-saver"`/`"powersaver"` parse sebagai Balanced
+    /// (PPD `power-saver` = padanan 1-ke-1 mode Balanced).
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
-            "balanced" => Some(Self::Balanced),
+            "balanced" | "power-saver" | "powersaver" => Some(Self::Balanced),
             "entertainment" | "ent" => Some(Self::Entertainment),
             "performance" | "perf" => Some(Self::Performance),
             _ => None,
@@ -44,22 +45,20 @@ impl AxiooProfile {
     /// PPD profile to set when this axioo profile is selected (two-way sync).
     pub fn ppd_profile(self) -> &'static str {
         match self {
-            Self::Balanced => "balanced",
-            Self::Entertainment | Self::Performance => "performance",
+            Self::Balanced => "power-saver",
+            Self::Entertainment => "balanced",
+            Self::Performance => "performance",
         }
     }
 
     /// Map an incoming PPD change to `(axioo profile, quiet_fan)`.
-    /// `current` is kept when PPD stays `performance` so the
-    /// Entertainment/Performance sub-mode (and its quiet flag) survives.
+    /// Pemetaan 1-ke-1; `quiet` dipertahankan apa adanya (quiet-fan
+    /// murni opsi kipas, tak tersentuh PPD).
     pub fn from_ppd(ppd: &str, current: Self, quiet: bool) -> (Self, bool) {
         match ppd {
-            "power-saver" => (Self::Balanced, true),
-            "balanced" => (Self::Balanced, false),
-            "performance" => match current {
-                Self::Entertainment | Self::Performance => (current, quiet),
-                _ => (Self::Performance, false),
-            },
+            "power-saver" => (Self::Balanced, quiet),
+            "balanced" => (Self::Entertainment, quiet),
+            "performance" => (Self::Performance, quiet),
             _ => (current, quiet),
         }
     }
@@ -122,13 +121,13 @@ mod tests {
 
     #[test]
     fn ppd_roundtrip() {
-        assert_eq!(AxiooProfile::Balanced.ppd_profile(), "balanced");
-        assert_eq!(AxiooProfile::Entertainment.ppd_profile(), "performance");
+        assert_eq!(AxiooProfile::Balanced.ppd_profile(), "power-saver");
+        assert_eq!(AxiooProfile::Entertainment.ppd_profile(), "balanced");
         assert_eq!(AxiooProfile::Performance.ppd_profile(), "performance");
-        // Incoming PPD keeps sub-mode + quiet flag.
+        // Incoming PPD 1-ke-1; quiet flag dipertahankan.
         assert_eq!(
             AxiooProfile::from_ppd("performance", AxiooProfile::Entertainment, true),
-            (AxiooProfile::Entertainment, true)
+            (AxiooProfile::Performance, true)
         );
         assert_eq!(
             AxiooProfile::from_ppd("performance", AxiooProfile::Balanced, false),
@@ -136,11 +135,19 @@ mod tests {
         );
         assert_eq!(
             AxiooProfile::from_ppd("power-saver", AxiooProfile::Performance, false),
+            (AxiooProfile::Balanced, false)
+        );
+        assert_eq!(
+            AxiooProfile::from_ppd("power-saver", AxiooProfile::Performance, true),
             (AxiooProfile::Balanced, true)
         );
         assert_eq!(
             AxiooProfile::from_ppd("balanced", AxiooProfile::Performance, true),
-            (AxiooProfile::Balanced, false)
+            (AxiooProfile::Entertainment, true)
+        );
+        assert_eq!(
+            AxiooProfile::from_ppd("balanced", AxiooProfile::Balanced, false),
+            (AxiooProfile::Entertainment, false)
         );
     }
 
@@ -166,6 +173,9 @@ mod tests {
         }
         // Legacy names no longer parse as profiles.
         assert_eq!(AxiooProfile::parse("quiet"), None);
-        assert_eq!(AxiooProfile::parse("power-saver"), None);
+        assert_eq!(
+            AxiooProfile::parse("power-saver"),
+            Some(AxiooProfile::Balanced)
+        );
     }
 }

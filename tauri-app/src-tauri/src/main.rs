@@ -182,8 +182,8 @@ impl EffectState {
 
 fn ppd_display(ppd: &str) -> (&'static str, bool) {
     match ppd {
-        "power-saver" => ("Balanced", true),
-        "balanced" => ("Balanced", false),
+        "power-saver" => ("Balanced", false),
+        "balanced" => ("Entertainment", false),
         "performance" => ("Performance", false),
         _ => ("Balanced", false),
     }
@@ -848,6 +848,52 @@ fn matugen_rev() -> u64 {
         .unwrap_or(0)
 }
 
+/// Watch `~/.cache/ryoku/` (non-rekursif): tiap tulis `colors.json`
+/// emit event `matugen-changed` + rev baru. Frontend hidden memakai ini
+/// sebagai pemicu tick (ganti poll cepat) — visible tak terpengaruh.
+/// Watch direktori (bukan file) agar create-pertama ikut tertangkap;
+/// dir tak ada (non-Ryoku) → diam, frontend pakai fallback interval.
+fn matugen_watch(app: tauri::AppHandle) {
+    use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return;
+    }
+    let dir = std::path::Path::new(&home).join(".cache/ryoku");
+    if !dir.is_dir() {
+        return;
+    }
+    let mut last = matugen_rev();
+    let handler = move |res: Result<notify::Event, notify::Error>| {
+        let Ok(ev) = res else { return };
+        let touches_palette = ev
+            .paths
+            .iter()
+            .any(|p| p.file_name().is_some_and(|n| n == "colors.json"));
+        if !touches_palette {
+            return;
+        }
+        // Debounce alami: rev = mtime detik; burst tulis dalam 1 detik
+        // yang sama hanya emit sekali.
+        let rev = matugen_rev();
+        if rev != last {
+            last = rev;
+            let _ = app.emit("matugen-changed", rev);
+        }
+    };
+    let mut watcher = match RecommendedWatcher::new(handler, Config::default()) {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    if watcher.watch(&dir, RecursiveMode::NonRecursive).is_err() {
+        return;
+    }
+    // Parkir thread selama proses hidup (watcher mati bila drop).
+    loop {
+        std::thread::park();
+    }
+}
+
 /// Palet matugen Ryoku (`~/.cache/ryoku/colors.json`) untuk theme GUI.
 /// Murni read-only; Err bila file tak ada agar frontend fallback ke theme statis.
 #[tauri::command]
@@ -1082,6 +1128,12 @@ fn main() {
             stops: Vec::new(),
         }))
         .setup(|app| {
+            // Watcher palet wallpaper (event-driven, thread parkir):
+            // frontend hidden tick via event, bukan poll cepat.
+            std::thread::spawn({
+                let h = app.handle().clone();
+                move || matugen_watch(h)
+            });
             // Ikon tray = ikon jendela bawaan bundle (logo), fallback 32x32.
             let icon = app
                 .default_window_icon()

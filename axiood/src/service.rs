@@ -22,11 +22,11 @@ impl AxiooControl {
     }
 
     /// Set axioo profile; returns the applied name.
-    /// Legacy `"Quiet"`/`"power-saver"` map to Balanced + quiet-fan on.
+    /// Legacy `"Quiet"` maps to Balanced + quiet-fan on.
     /// PPD + RAPL apply happens in the main loop via pending flag.
     async fn set_profile(&self, profile: String) -> zbus::fdo::Result<String> {
         let mut st = self.state.write().await;
-        if profile.eq_ignore_ascii_case("quiet") || profile.eq_ignore_ascii_case("power-saver") {
+        if profile.eq_ignore_ascii_case("quiet") {
             st.profile = AxiooProfile::Balanced;
             st.quiet_fan = true;
         } else {
