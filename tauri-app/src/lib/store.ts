@@ -75,6 +75,9 @@ interface AppStore {
   setFanCurve: (c: Array<[number, number]>) => void;
   fanManualDuty: number;
   setFanManualDuty: (n: number) => void;
+  /** Tampilkan tombol -/kotak/X di titlebar (persist, default tampil). */
+  showWinBtns: boolean;
+  setShowWinBtns: (b: boolean) => void;
 }
 
 let pollTimer: number | undefined;
@@ -109,6 +112,55 @@ function hiddenMs(): number {
 
 const LEGACY_TAB = "axioo.tab";
 const LEGACY_THEME = "axioo.theme";
+
+/* -------- session sensor log (in-memory ring, never persisted) --------
+ * Diisi tiap poll tick dari snapshot yang memang sudah diambil.
+ * Nol IPC/hardware tambahan — murni mencatat. Cap 3600 baris. */
+export interface HistRow {
+  t: number; temp: number | null; fanMode: string; duty: number;
+  rpm: number | null; watts: number | null; bat: number | null;
+}
+const HIST_MAX = 3600;
+const hist: HistRow[] = [];
+
+export function pushHist(s: Snapshot) {
+  hist.push({
+    t: Date.now(),
+    temp: s.max_temp_c ?? s.ec_cpu_temp ?? null,
+    fanMode: s.profile.fan_mode || "-",
+    duty: s.profile.fan_duty,
+    rpm: s.ec_fan1_rpm ?? s.fan_rpms[0] ?? null,
+    watts: s.pkg_watts,
+    bat: s.bat_pct,
+  });
+  if (hist.length > HIST_MAX) hist.splice(0, hist.length - HIST_MAX);
+}
+
+export function histCount(): number {
+  return hist.length;
+}
+
+export function histCsv(): string {
+  const q = (v: number | string | null) => (v == null ? "" : String(v));
+  const lines = ["timestamp_iso,temp_c,fan_mode,fan_duty_pct,fan1_rpm,pkg_w,batt_pct"];
+  for (const r of hist) {
+    lines.push(
+      [new Date(r.t).toISOString(), q(r.temp), r.fanMode, r.duty, q(r.rpm), q(r.watts), q(r.bat)].join(",")
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+export function downloadCsv() {
+  try {
+    const blob = new Blob([histCsv()], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "axioo-sensors.csv";
+    a.click();
+    window.setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch { /* abaikan (SSR/tests) */ }
+}
 
 function legacyTab(): Tab | null {
   try {
@@ -173,6 +225,7 @@ export const useStore = create<AppStore>()(
               set({ fanCurve: s.profile.curve });
             }
             set({ snap: s });
+            pushHist(s);
             // Restore baru sukses saat hidden → turun ke safety net.
             if (isHiddenNow() && pollMs !== hiddenMs()) arm(hiddenMs());
           } catch {
@@ -325,6 +378,8 @@ export const useStore = create<AppStore>()(
       setFanCurve: (fanCurve) => set({ fanCurve }),
       fanManualDuty: 70,
       setFanManualDuty: (fanManualDuty) => set({ fanManualDuty }),
+      showWinBtns: true,
+      setShowWinBtns: (showWinBtns) => set({ showWinBtns }),
       hydrateKbd: (snap) => {
         const st = get();
         if (st.kbdHydrated || snap.kbd_nodes === 0) return;
@@ -371,6 +426,7 @@ export const useStore = create<AppStore>()(
         kbdFollowWp: s.kbdFollowWp,
         fanCurve: s.fanCurve,
         fanManualDuty: s.fanManualDuty,
+        showWinBtns: s.showWinBtns ?? true,
       }),
     },
   ),

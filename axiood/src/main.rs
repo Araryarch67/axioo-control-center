@@ -20,10 +20,10 @@ mod service;
 mod state;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-use axioo_lib::{cpu, ec, fan, fan_ctrl};
+use axioo_lib::{cpu, devices, ec, fan, fan_ctrl, rapl};
 use profile::AxiooProfile;
 use service::{AxiooControl, AXIOO_PATH, AXIOO_SERVICE};
 use state::DaemonState;
@@ -60,6 +60,24 @@ fn args() -> (f64, Option<String>, bool, bool, bool) {
     (interval, profile, no_fan, no_rapl, no_ppd)
 }
 
+/// Next package-watts from a fresh RAPL sample. Pure: same wrap-aware
+/// math as the GUI path (`rapl::watts`), testable without hardware.
+fn next_watts(
+    prev: &Option<(rapl::RaplDomain, Instant)>,
+    cur: &rapl::RaplDomain,
+    now: Instant,
+) -> (Option<f64>, (rapl::RaplDomain, Instant)) {
+    let watts = prev.as_ref().and_then(|(before, t0)| {
+        let dt = now.duration_since(*t0).as_secs_f64();
+        if dt > 0.2 {
+            rapl::watts(before, cur, dt)
+        } else {
+            None
+        }
+    });
+    (watts, (cur.clone(), now))
+}
+
 /// Suhu max(CPU,GPU): EC `0x07`/`0xCD` bila ada, fallback coretemp.
 fn current_temp_c() -> Option<i32> {
     if let Ok(map) = ec::read_map() {
@@ -72,8 +90,12 @@ fn current_temp_c() -> Option<i32> {
         .map(|t| t.round() as i32)
 }
 
-fn apply_rapl(profile: AxiooProfile, no_rapl: bool) {
+fn apply_rapl(profile: AxiooProfile, no_rapl: bool, locked: bool) {
     if no_rapl {
+        return;
+    }
+    if locked {
+        println!("axiood: RAPL skipped (unvalidated model — firmware defaults kept)");
         return;
     }
     let (pl1, pl2) = profile.rapl_limits_w();
@@ -98,6 +120,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // systemd me-restart dengan konteks yang benar.
         std::process::exit(1);
     }
+
+    // The EC fan loop only runs on validated models. Unknown hardware
+    // keeps D-Bus profiles + RAPL + kbd restore, but never touches the EC.
+    let gate = devices::fan_gate();
+    println!(
+        "axiood: device {} (grade: {})",
+        gate.profile.id,
+        gate.profile.grade.as_str()
+    );
+    for (k, v) in devices::attested_facts() {
+        println!("axiood: fact {k}={v}");
+    }
+    let no_fan = match gate.decision {
+        devices::FanWrite::Locked => {
+            println!(
+                "axiood: fan loop DISABLED for {} — validate EC map first (`axioo-ctl fan dump`).",
+                gate.display
+            );
+            true
+        }
+        devices::FanWrite::AllowedWithWarning => {
+            println!(
+                "axiood: WARNING — {}: same barebone family, untested.",
+                gate.display
+            );
+            no_fan
+        }
+        devices::FanWrite::Allowed => no_fan,
+    };
+    let rapl_locked = !gate.profile.fan_write_allowed;
 
     let conn = zbus::Connection::system().await?;
     let flavor = ppd::detect_flavor(&conn).await;
@@ -168,7 +220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Apply awal: RAPL + selaraskan PPD bila override berbeda.
     {
         let st = state.read().await;
-        apply_rapl(st.profile, no_rapl);
+        apply_rapl(st.profile, no_rapl, rapl_locked);
         if !no_ppd {
             let want = st.profile.ppd_profile();
             if want != ppd_current {
@@ -199,7 +251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (st.profile, st.quiet_fan, a)
                 };
                 if do_apply {
-                    apply_rapl(profile, no_rapl);
+                    apply_rapl(profile, no_rapl, rapl_locked);
                     if !no_ppd {
                         let want = profile.ppd_profile();
                         let cur = state.read().await.ppd_profile.clone();
@@ -266,9 +318,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                // 3. Power sample (root-only energy counter → watts for GUI).
+                {
+                    let now = Instant::now();
+                    if let Some(cur) =
+                        rapl::domains().into_iter().find(|d| d.id.ends_with(":0"))
+                    {
+                        let mut st = state.write().await;
+                        let (watts, sample) = next_watts(&st.prev_power, &cur, now);
+                        if watts.is_some() {
+                            st.pkg_watts = watts;
+                        }
+                        st.prev_power = Some(sample);
+                    }
+                }
             }
             _ = ppd_tick.tick(), if !no_ppd => {
-                // 3. Follow PPD (polling 3 dtk; cukup responsif untuk slider GNOME).
+                // 4. Follow PPD (polling 3 dtk; cukup responsif untuk slider GNOME).
                 match ppd::get_active_profile(&conn).await {
                     Ok((cur, _)) => {
                         let known = state.read().await.ppd_profile.clone();
@@ -302,5 +368,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn domain(energy_uj: u64) -> rapl::RaplDomain {
+        rapl::RaplDomain {
+            id: "intel-rapl:0".to_string(),
+            name: "package-0".to_string(),
+            energy_uj: Some(energy_uj),
+            max_uj: Some(1_000_000_000),
+            constraints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn next_watts_needs_two_samples_and_sane_dt() {
+        let t0 = Instant::now();
+        let cur = domain(2_000_000);
+        // No previous sample: stores, reports nothing yet.
+        let (w, prev) = next_watts(&None, &cur, t0);
+        assert!(w.is_none());
+        // 2 joules over 2 seconds = 1W.
+        let t1 = t0 + Duration::from_secs(2);
+        let (w, _) = next_watts(&Some(prev.clone()), &domain(4_000_000), t1);
+        assert_eq!(w, Some(1.0));
+        // Too-fast tick: skip rather than spike.
+        let (w, _) = next_watts(&Some(prev), &domain(4_000_000), t0);
+        assert!(w.is_none());
     }
 }

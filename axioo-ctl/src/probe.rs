@@ -1,6 +1,7 @@
 //! `axioo-ctl probe`: read-only hardware capability dump.
+//! `--json` emits the same data machine-readable (for scripts + issue reports).
 
-use axioo_lib::{battery, cpu, dmi, ec, hwmon, leds, nvidia, platform, rapl};
+use axioo_lib::{battery, cpu, devices, dmi, ec, hwmon, leds, nvidia, platform, rapl};
 
 fn section(title: &str) {
     println!("\n== {title} ==");
@@ -21,6 +22,26 @@ pub fn run() {
     for (k, v) in &dmi {
         println!("  {k:<16} {v}");
     }
+
+    section("device (dynamic database)");
+    let dev = devices::current();
+    println!("  id: {}", dev.id);
+    println!("  model: {}", dev.display_name(&dmi));
+    println!("  grade: {}", dev.grade.as_str());
+    println!("  table: {}", devices::table_source());
+    if let Some(w) = devices::table_warning() {
+        println!("  table warning: {w}");
+    }
+    println!(
+        "  fan writes: {}",
+        if dev.fan_write_allowed {
+            "allowed"
+        } else {
+            "locked (read-only)"
+        }
+    );
+    println!("  kbd zones: {}", dev.kbd_zones);
+    println!("  note: {}", dev.notes);
 
     section("cpu");
     let c = cpu::sample();
@@ -213,4 +234,99 @@ fn fmt_opt_mhz(v: Option<u64>) -> String {
 
 fn fmt_opt1(v: Option<f64>) -> String {
     v.map_or("-".to_string(), |x| format!("{x:.0}"))
+}
+
+/// Machine-readable twin of [`run`] — same sources, no prints besides JSON.
+/// `null` = unreadable on this machine (NOT an error).
+pub fn run_json() {
+    use serde_json::json;
+    let c = cpu::sample();
+    let dev = devices::current();
+    let dmi_map = dmi::read_dmi();
+    let display = dev.display_name(&dmi_map);
+    let out = json!({
+        "tool": "axioo-ctl probe",
+        "dmi": dmi_map,
+        "device": {
+            "id": dev.id,
+            "marketing": display,
+            "grade": dev.grade.as_str(),
+            "fan_write_allowed": dev.fan_write_allowed,
+            "kbd_zones": dev.kbd_zones,
+            "notes": dev.notes,
+        },
+        "cpu": {
+            "package_temp_c": c.package_temp_c,
+            "max_core_temp_c": c.max_core_temp_c,
+            "avg_mhz": c.avg_mhz,
+            "max_mhz": c.max_mhz,
+            "driver": c.driver,
+            "governor": c.governor,
+            "epp": c.epp,
+        },
+        "hwmon_chips": hwmon::chips(),
+        "temps": hwmon::temps().iter().map(|t| json!({
+            "chip": t.chip, "label": t.label, "input_c": t.input_c,
+        })).collect::<Vec<_>>(),
+        "fans": hwmon::fans().iter().map(|f| json!({
+            "chip": f.chip, "label": f.label, "rpm": f.rpm,
+        })).collect::<Vec<_>>(),
+        "rapl": rapl::domains().iter().map(|d| json!({
+            "id": d.id, "name": d.name, "energy_uj": d.energy_uj,
+            "constraints_w": d.constraints,
+        })).collect::<Vec<_>>(),
+        "nvidia": nvidia::gpus().unwrap_or_default().iter().map(|g| json!({
+            "index": g.index, "name": g.name, "temp_c": g.temp_c,
+            "power_w": g.power_w, "power_limit_w": g.power_limit_w,
+            "gr_clock_mhz": g.gr_clock_mhz, "mem_clock_mhz": g.mem_clock_mhz,
+            "usage_pct": g.usage_pct,
+        })).collect::<Vec<_>>(),
+        "dgpu": {
+            "pci_addr": nvidia::dgpu_pci_addr(),
+            "power": nvidia::dgpu_power().map(|p| match p {
+                nvidia::DgpuPower::Active => "active",
+                nvidia::DgpuPower::Suspended => "suspended",
+                nvidia::DgpuPower::Absent => "absent",
+            }),
+            "procs": nvidia::dgpu_procs().unwrap_or_default().iter().map(|p| json!({
+                "pid": p.pid, "name": p.name, "mem_mb": p.mem_mb,
+            })).collect::<Vec<_>>(),
+        },
+        "batteries": battery::batteries().iter().map(|b| json!({
+            "name": b.name, "capacity_pct": b.capacity_pct, "status": b.status,
+            "technology": b.technology, "voltage_v": b.voltage_v,
+            "current_a": b.current_a, "power_w": b.power_w,
+            "cycle_count": b.cycle_count, "health_pct": b.health_pct,
+            "time_hours": b.time_hours(),
+            "charge_start_threshold": b.charge_start_threshold,
+            "charge_end_threshold": b.charge_end_threshold,
+        })).collect::<Vec<_>>(),
+        "ac_online": battery::ac_online(),
+        "leds": leds::kbd_candidates().iter().map(|l| json!({
+            "name": l.name, "brightness": l.brightness,
+            "max_brightness": l.max_brightness,
+        })).collect::<Vec<_>>(),
+        "led_count": leds::leds().len(),
+        "platform_profile": platform::platform_profile(),
+        "platform_devices": platform::platform_devices().iter()
+            .filter(|d| {
+                let u = d.to_uppercase();
+                u.starts_with("CLV") || u.contains("CLEVO") || u.contains("WMI") || u.contains("EC")
+            }).collect::<Vec<_>>(),
+        "wmi_guids": platform::wmi_guids(),
+        "thermal_zones": platform::thermal_zones().iter().map(|z| json!({
+            "name": z.name, "kind": z.kind, "temp_c": z.temp_c,
+        })).collect::<Vec<_>>(),
+        "cooling_devices": platform::cooling_devices().iter().map(|z| json!({
+            "name": z.name, "kind": z.kind,
+            "cur_state": z.cur_state, "max_state": z.max_state,
+        })).collect::<Vec<_>>(),
+        "ec": {
+            "ec_sys_available": ec::ec_sys_available(),
+            "ec_write_support": ec::ec_write_support(),
+            "ec_io_readable": ec::ec_io_readable(),
+            "vendor_modules": ec::loaded_vendor_modules(),
+        },
+    });
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }

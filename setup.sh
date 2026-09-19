@@ -13,11 +13,13 @@
 set -euo pipefail
 
 QUIET=1
+AUTO_REBOOT=0
 for a in "$@"; do
     case "$a" in
         -v|--verbose) QUIET=0 ;;
         -q|--quiet|--silent) QUIET=1 ;; # kompat: dulu opt-in, kini default
-        -h|--help) echo "pakai: ./setup.sh [--verbose]"; exit 0 ;;
+        --auto-reboot) AUTO_REBOOT=1 ;; # reboot tanpa tanya bila kernel mismatch
+        -h|--help) echo "pakai: ./setup.sh [--verbose] [--auto-reboot]"; exit 0 ;;
     esac
 done
 # setup.sh verbose → teruskan --verbose ke script.sh (build).
@@ -81,11 +83,11 @@ log "=== [0b/4] system deps (pacman, idempoten) ==="
 if [ "$QUIET" = 1 ]; then
     quiet_run 1 "system deps" sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
         python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
-        librsvg openssl appmenu-gtk-module man-db
+        librsvg openssl appmenu-gtk-module man-db bun
 else
     sudo pacman -S --needed --noconfirm base-devel git curl wget file python3 \
         python-pillow gcc make pkg-config dkms webkit2gtk-4.1 gtk3 libappindicator-gtk3 \
-        librsvg openssl appmenu-gtk-module man-db 2>&1 | tail -n 3 || true
+        librsvg openssl appmenu-gtk-module man-db bun 2>&1 | tail -n 3 || true
 fi
 
 log "=== [0/4] cek AUR helper (buat driver clevo) ==="
@@ -106,18 +108,83 @@ fi
 [ "$QUIET" = 1 ] || echo "AUR: $AUR_METHOD"
 
 log "=== [1/4] kernel headers ==="
-if [ ! -d "/lib/modules/$(uname -r)/build" ]; then
-    log "install linux-headers…"
+RUN_KERN="$(uname -r)"
+# Nama paket headers mengikuti flavor kernel (Arch meta `linux-headers`
+# SALAH untuk cachyos/zen/lts — DKMS tetap gagal walau install sukses).
+HDR_PKG="linux-headers"
+case "$RUN_KERN" in
+    *-cachyos*) HDR_PKG="linux-cachyos-headers" ;;
+    *-zen*) HDR_PKG="linux-zen-headers" ;;
+    *-lts*) HDR_PKG="linux-lts-headers" ;;
+    *-hardened*) HDR_PKG="linux-hardened-headers" ;;
+esac
+if [ ! -d "/lib/modules/$RUN_KERN/build" ]; then
+    log "install $HDR_PKG…"
     if [ "$QUIET" = 1 ]; then
-        quiet_run 2 "kernel headers" sudo pacman -S --needed --noconfirm linux-headers
+        quiet_run 2 "kernel headers" sudo pacman -S --needed --noconfirm "$HDR_PKG"
     else
-        sudo pacman -S --needed --noconfirm linux-headers
+        sudo pacman -S --needed --noconfirm "$HDR_PKG"
     fi
 elif [ "$QUIET" = 1 ]; then
     bar 2 "kernel headers (sudah ada) ✓"; echo
 fi
 
+log "=== [1b/4] kernel running-vs-headers (reboot bila mismatch) ==="
+if [ ! -d "/lib/modules/$RUN_KERN/build" ]; then
+    # Rolling tanpa reboot: headers repo hanya untuk kernel terbaru,
+    # kernel yang jalan sudah tak punya headers → DKMS pasti gagal.
+    NEWEST="$(ls -d /usr/lib/modules/*/build 2>/dev/null | sort -V | tail -n 1 | cut -d/ -f5)"
+    echo "kernel berjalan ($RUN_KERN) tak punya headers."
+    if [ -n "${NEWEST:-}" ]; then
+        echo "kernel terbaru dengan headers: $NEWEST."
+        echo "reboot ke situ, lalu ./setup.sh lagi (langkah idempoten)."
+    else
+        echo "tidak ada headers sama sekali — cek $HDR_PKG."
+    fi
+    if [ "$AUTO_REBOOT" = 1 ]; then
+        echo "auto-reboot aktif — reboot sekarang."
+        sudo systemctl reboot
+        exit 0 # tak tercapai bila reboot jalan
+    fi
+    if [ -t 0 ]; then
+        printf 'reboot sekarang? [y/N] '
+        read -r ans
+        case "$ans" in
+            y|Y|ya|YA|iya|IYA) sudo systemctl reboot ;;
+        esac
+    fi
+    echo "batal: reboot dulu (atau ./setup.sh --auto-reboot), lalu jalankan lagi."
+    exit 1
+fi
+
 log "=== [2/4] base driver clevo-drivers-dkms-git ($AUR_METHOD) ==="
+# Gerbang device (cermin axioo-lib/src/devices.rs, tanpa perlu build dulu):
+# quirk Studio X DMI-gated di dalam driver (no-op di board lain), tapi di
+# hardware asing driver custom tak ada gunanya — lewati total.
+detect_grade() {
+    local b p s v bv up
+    b="$(cat /sys/class/dmi/id/board_name 2>/dev/null)"
+    p="$(cat /sys/class/dmi/id/product_name 2>/dev/null)"
+    s="$(cat /sys/class/dmi/id/product_sku 2>/dev/null)"
+    v="$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)"
+    bv="$(cat /sys/class/dmi/id/board_vendor 2>/dev/null)"
+    up="$(printf '%s %s %s %s %s' "$b" "$p" "$s" "$v" "$bv" | tr '[:lower:]' '[:upper:]')"
+    case "$up" in
+        *X560WNR1*|*X560WNR-G*|*NP9561R*) echo "sibling" ;;
+        *X560WNR*|*PONGO\ STUDIO\ X*) echo "supported" ;;
+        *AXIOO*|*CLEVO*|*PONGO*) echo "unknown-clevo" ;;
+        *) echo "foreign" ;;
+    esac
+}
+GRADE="$(detect_grade)"
+[ "$QUIET" = 1 ] || echo "device grade: $GRADE"
+SKIP_DRIVER=0
+if [ "$GRADE" = "foreign" ]; then
+    log "hardware asing ($GRADE) — lewati driver + quirk; app generik tetap diinstall."
+    SKIP_DRIVER=1
+    [ "$QUIET" = 1 ] && { bar 3 "base driver (dilewati: asing)"; echo; }
+fi
+if [ "$SKIP_DRIVER" = 0 ]; then
 case "$AUR_METHOD" in
     skip*) log "source driver sudah ada, lewati."; [ "$QUIET" = 1 ] && { bar 3 "base driver (sudah ada) ✓"; echo; } ;;
     yay) if [ "$QUIET" = 1 ]; then quiet_run 3 "base driver" yay -S --needed --noconfirm clevo-drivers-dkms-git; else yay -S --needed --noconfirm clevo-drivers-dkms-git; fi ;;
@@ -128,12 +195,23 @@ case "$AUR_METHOD" in
         if [ "$QUIET" = 1 ]; then quiet_run 3 "base driver" bash -c 'cd /tmp/clevo-drivers-aur && makepkg -si --noconfirm'; else (cd /tmp/clevo-drivers-aur && makepkg -si --noconfirm); fi
         ;;
 esac
+fi
 
 log "=== [3/4] quirk Studio X + DKMS install (sudo) ==="
+# Resep patch ikut grade: full studiox HANYA untuk X560WNR (4 patch
+# non-quirk tanpa gate DMI); model Axioo/Clevo lain dapat driver generik
+# (QUIRK=none) — probe setelahnya menentukan resep pass 2.
+QUIRK_SELECT="studiox"
+[ "$GRADE" = "unknown-clevo" ] && QUIRK_SELECT="none"
+[ "$QUIET" = 1 ] || echo "quirk recipe: $QUIRK_SELECT (grade $GRADE)"
+if [ "$SKIP_DRIVER" = 0 ]; then
 if [ "$QUIET" = 1 ]; then
-    quiet_run 4 "quirk DKMS" sudo "$HERE/packaging/clevo-drivers-axioo/install.sh"
+    quiet_run 4 "quirk DKMS ($QUIRK_SELECT)" sudo env QUIRK="$QUIRK_SELECT" "$HERE/packaging/clevo-drivers-axioo/install.sh"
 else
-    sudo "$HERE/packaging/clevo-drivers-axioo/install.sh"
+    sudo env QUIRK="$QUIRK_SELECT" "$HERE/packaging/clevo-drivers-axioo/install.sh"
+fi
+elif [ "$QUIET" = 1 ]; then
+    bar 4 "quirk DKMS (dilewati: asing)"; echo
 fi
 
 log "=== [4/4] build + AppImage ==="
@@ -179,6 +257,8 @@ _daemon_install_silent() {
     sudo rm -f /etc/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
     sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
+    # Device table override (CLI/daemon/GUI baca ini dulu; embedded fallback).
+    sudo install -Dm644 "$HERE/axioo-lib/devices.toml" /usr/share/axioo-control-center/devices.toml
     # axioo-ctl sistem (udev restore butuh path absolut /usr/bin).
     if [ -f "$HERE/target/release/axioo-ctl" ]; then
         sudo install -Dm755 "$HERE/target/release/axioo-ctl" /usr/bin/axioo-ctl
@@ -202,6 +282,7 @@ if [ -f "$HERE/target/release/axiood" ]; then
         sudo rm -f /etc/systemd/system/axiood.service
         sudo install -Dm644 "$HERE/packaging/axiood.service" /usr/lib/systemd/system/axiood.service
         sudo install -Dm644 "$HERE/packaging/udev/99-axioo-kbd.rules" /usr/lib/udev/rules.d/99-axioo-kbd.rules
+        sudo install -Dm644 "$HERE/axioo-lib/devices.toml" /usr/share/axioo-control-center/devices.toml
         # axioo-ctl sistem (udev restore butuh path absolut /usr/bin).
         if [ -f "$HERE/target/release/axioo-ctl" ]; then
             sudo install -Dm755 "$HERE/target/release/axioo-ctl" /usr/bin/axioo-ctl

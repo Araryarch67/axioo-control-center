@@ -7,7 +7,7 @@ PKGBUILD in `packaging/aur/PKGBUILD` — full package: Tauri GUI
 D-Bus `com.axioo.Control.conf` to `/etc/dbus-1/system.d`, polkit to
 `/usr/share/polkit-1/actions`, systemd `axiood.service` to
 `/usr/lib/systemd/system`, udev `99-axioo-kbd.rules` to
-`/usr/lib/udev/rules.d`. Build order: `npm ci && npm run build`
+`/usr/lib/udev/rules.d`. Build order: `bun install --frozen-lockfile && bun run build`
 (frontend first — the Tauri binary embeds `tauri-app/dist`) then
 `cargo build --release --workspace`. `.SRCINFO` is generated via
 `makepkg --printsrcinfo` (must be included in AUR uploads);

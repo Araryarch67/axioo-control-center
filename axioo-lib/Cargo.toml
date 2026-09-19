@@ -7,3 +7,5 @@ description = "Read-only hardware introspection library for Axioo Pongo / Clevo 
 
 [dependencies]
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"

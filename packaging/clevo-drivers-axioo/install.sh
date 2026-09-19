@@ -2,10 +2,25 @@
 # Custom DKMS driver buat Axioo Pongo Studio X (quirk backlight 0x17).
 #
 # Jalankan dari folder ini:  sudo ./install.sh
+# Resep patch via env QUIRK (fondasi two-pass setup dinamis):
+#   QUIRK=studiox  (default) paket Studio X full: quirk 0x17 (DMI-gated,
+#                  no-op di board lain) + 4th-zone + numpad-EC 0x0B +
+#                  lightbar-EC 0x07 + getspecs-debug. HANYA untuk X560WNR —
+#                  4 patch non-quirk TANPA gate DMI, jangan dipaksa ke
+#                  model lain.
+#   QUIRK=none     driver generik pristine (tanpa patch): aman untuk semua
+#                  Axioo/Clevo — pass 1 two-pass, lalu `probe` menentukan
+#                  resep yang cocok sebelum rebuild.
 # Uninstall (balik ke AUR):  sudo dkms remove tuxedo-drivers-axioo/4.20.1 --all
 #                             sudo rm -rf /usr/src/tuxedo-drivers-axioo-4.20.1
 #                             sudo dkms install clevo-drivers/4.20.1
 set -euo pipefail
+
+QUIRK="${QUIRK:-studiox}"
+case "$QUIRK" in
+    studiox|none) ;;
+    *) echo "QUIRK tak dikenal: '$QUIRK' (pilih: studiox|none)"; exit 1 ;;
+esac
 
 SRC=/usr/src/clevo-drivers-4.20.1          # source AUR (prasyarat: clevo-drivers-dkms-git)
 DST=/usr/src/tuxedo-drivers-axioo-4.20.1   # source custom kita
@@ -28,11 +43,15 @@ dkms remove tuxedo-drivers-axioo/4.20.1 --all || true
 # 2. Salin tree + terapkan quirk + dkms.conf custom
 rm -rf "$DST"
 cp -r "$SRC" "$DST"
-patch "$DST/clevo_leds.h" < "$HERE/studiox-kbd-quirk.patch"
-patch "$DST/clevo_leds.h" < "$HERE/studiox-4th-zone.patch"
-patch "$DST/clevo_leds.h" < "$HERE/studiox-getspecs-debug.patch"
-patch "$DST/clevo_leds.h" < "$HERE/studiox-numpad-ec.patch"
-patch "$DST/clevo_leds.h" < "$HERE/studiox-lightbar-ec.patch"
+if [ "$QUIRK" = "studiox" ]; then
+    patch "$DST/clevo_leds.h" < "$HERE/studiox-kbd-quirk.patch"
+    patch "$DST/clevo_leds.h" < "$HERE/studiox-4th-zone.patch"
+    patch "$DST/clevo_leds.h" < "$HERE/studiox-getspecs-debug.patch"
+    patch "$DST/clevo_leds.h" < "$HERE/studiox-numpad-ec.patch"
+    patch "$DST/clevo_leds.h" < "$HERE/studiox-lightbar-ec.patch"
+else
+    echo "QUIRK=none: driver generik tanpa patch (pass 1 two-pass)."
+fi
 # TIDAK dipakai: studiox-lightbar-segments-ec.patch (0x06/08/09/0A).
 # Hasil scan 2026-09-20: tak ada yang jadi segmen rear; salah satunya
 # malah menggerakkan numpad (alias dengan 0x0B). Rear = 1 zona (0x07).

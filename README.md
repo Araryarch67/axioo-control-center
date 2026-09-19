@@ -45,8 +45,12 @@ in `setup.sh`). Manual driver steps: see
 
 ```sh
 ./target/debug/axioo-ctl probe          # hardware capabilities
+./target/debug/axioo-ctl probe --json   # same, machine-readable (paste into issues)
 ./target/debug/axioo-ctl kbd status     # expect 5 nodes: 4 zones + rear
+./target/debug/axioo-ctl gpu status     # dGPU RTD3 state + holders (never wakes it)
 ./target/debug/axioo-ctl fan dump       # needs sudo + modprobe ec_sys
+./target/debug/axioo-ctl battery status # health + time estimate + thresholds
+./target/debug/axioo-ctl config export --file backup.json  # backup all tunables
 ls /sys/class/leds/ | grep kbd          # rgb:kbd_backlight{,_1,_2,_3,_4}
 ```
 
@@ -56,11 +60,11 @@ Then launch the app (or `cd tauri-app && ./dev.sh`).
 
 | Tab | What you get |
 |---|---|
-| Dashboard | CPU/GPU temps, clocks, fans, battery, memory, package power — one glance |
+| Dashboard | CPU/GPU temps, clocks, fans, battery, memory, package power — one glance. Passive alert banner (overheat ≥95°C, fan-at-0-rpm, degraded battery) + session sensor log with CSV export |
 | Performance | Balanced/Entertainment/Performance modes + quiet-fan, package power caps |
 | Fan | Curve / Manual / EC-auto modes, **draggable** fan curve, live RPM + EC status |
 | Keyboard | 4 zones + 1 rear, presets + **custom RGB picker**, 12 animated effects + independent rear-exhaust FX, **Follow wallpaper** (matugen), live visualizer |
-| Power | Battery, FlexiCharger start/end thresholds, CPU package power |
+| Power | Battery, FlexiCharger start/end thresholds, CPU package power, health %, time-to-empty/full, AC status |
 | Settings | Theme (incl. **MATUGEN** — follows wallpaper live), start-at-login (tray), service status |
 
 ## Not working?
@@ -74,8 +78,8 @@ Then launch the app (or `cd tauri-app && ./dev.sh`).
 > **Tested only on the Pongo Studio X 2025 (X560WNR-SU9).**
 > Other Pongo models: install works, but fan writes stay locked until
 > the EC map is validated — start read-only (`probe`, `fan dump`,
-> `kbd status`). Got another model? Open an issue with your `probe`
-> output + DMI.
+> `kbd status`). Got another model? Open an issue with your `probe --json`
+> output.
 
 ## Supported hardware
 
@@ -89,6 +93,28 @@ firmware may differ slightly):
 | Sager / Xotic PC | NP9561R (X560WNR1-G) — same, no tester yet |
 | AVADirect | X560WNR-G — same, no tester yet |
 
+Full matrix per brand/type/feature: [`docs/support-device.md`](docs/support-device.md).
+
+## Add your device
+
+Got a Pongo we haven't validated? Ten minutes is enough to unblock it —
+no code changes needed:
+
+1. `./setup.sh` — installs safe on any Axioo/Clevo (unknown models stay read-only, fan writes locked).
+2. `sudo modprobe ec_sys` (one time, so the EC can be read).
+3. `axioo-ctl validate` — idle sample, automatic load sample, verdicts, keyboard walk, and a privacy-scrubbed report (no product UUID).
+4. All MATCH? `sudo axioo-ctl validate --apply` unlocks your machine on the spot.
+5. Optional: open an issue with the report (the command prints a prefilled link) so your model gets a named entry upstream.
+
+Just naming a model (no unlock) is a text edit: add a `[[device]]`
+block to `axioo-lib/devices.toml` — or drop it into
+`/etc/axioo-control-center/devices.toml` to apply without rebuilding.
+Fan control stays locked until step 4 passes on real hardware.
+
+No root for EC? `axioo-ctl probe --json` alone already fills the DMI row.
+Behavior reference for untested models is the vendor
+Control Center 3.0 (per-model profiles, fan curves, keyboard zones).
+
 > Keyboard dead after a kernel update? Rebuild DKMS:
 > `sudo dkms autoinstall` then `sudo modprobe -r tuxedo_keyboard &&
 > sudo modprobe tuxedo_keyboard` (tuxedo drivers are fragile across
@@ -100,9 +126,10 @@ firmware may differ slightly):
 * EC fan protocol + write contract: [`docs/ec-fan-protocol.md`](docs/ec-fan-protocol.md)
 * Daemon, profiles, PPD sync, D-Bus API: [`docs/daemon.md`](docs/daemon.md)
 * Backlight + quirk + restore chain: [`docs/kbd-backlight.md`](docs/kbd-backlight.md)
+* Device support matrix + research notes: [`docs/support-device.md`](docs/support-device.md)
 * Why there is no per-key RGB: [`docs/per-key-rgb.md`](docs/per-key-rgb.md)
 * AUR/systemd/udev packaging + autostart: [`docs/packaging.md`](docs/packaging.md)
-* CLI reference offline: `man axioo-ctl` (`packaging/man/axioo-ctl.1`)
+* CLI reference offline: `man axioo-ctl` (`packaging/man/axioo-ctl.1`) — incl. `gpu status`, `completion`, `config export|import`, `probe --json`
 
 ## Credits
 

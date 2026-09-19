@@ -33,6 +33,13 @@ running as root. Direct EC writes from the CLI are limited to one-shot
 .B probe
 Dump hardware capabilities: DMI, sensors, RAPL, NVIDIA, LEDs, ACPI/WMI, EC.
 .TP
+.BR probe " --json"
+Same data as
+.B probe
+as machine-readable JSON (for scripts and issue reports;
+.I null
+means unreadable on this machine, not an error).
+.TP
 .BR monitor " [" \-i|--interval
 .IR SECONDS ]
 .RI [ \-n|--count
@@ -163,6 +170,45 @@ Print current charge thresholds (start/end).
 .BR battery " set [" \-\-start " \fIN\fR] [" \-\-end " \fIN\fR]"
 Set FlexiCharger thresholds (requires root). Validated against the
 firmware's available list.
+.TP
+.B gpu status
+dGPU power state (RTD3-aware: suspended GPUs are reported from PCI
+.I runtime_status
+without waking them) + processes holding the GPU + live stats when awake.
+.TP
+.BR completion " " \fISHELL\fR
+Print shell completions to stdout, where
+.I SHELL
+is
+.BR bash ,
+.BR fish ,
+.BR zsh ,
+.BR powershell ,
+or
+.BR elvish .
+.TP
+.BR config " export [" \-\-file " \fIPATH\fR]"
+Export profile, fan mode, keyboard state and battery thresholds as one
+JSON file (stdout by default). Daemon sections are omitted with a warning
+when
+.B axiood
+is not running.
+.TP
+.BR config " import [" \-\-file " \fIPATH\fR]"
+Apply a JSON file from
+.B config export
+(\-\-file or stdin). Battery thresholds require root; per-section results
+are reported and failures exit nonzero.
+.TP
+.BR validate " [" \-\-load\-secs " \fIN\fR] [" \-\-skip\-kbd "] [" \-\-file " \fIPATH\fR] [" \-\-apply "]"
+Guided self-validation for a new model (EC read-only, never writes fan
+duty): idle sample, all-core load sample, MATCH/MISMATCH verdicts,
+interactive keyboard zone walk, and a privacy-scrubbed JSON report
+(no product UUID) with a prefilled issue URL.
+.B \-\-apply
+unlocks this machine locally when all checks MATCH (writes
+.IR /var/lib/axiood/validated ,
+needs root) — no app update needed; upstream the report for a named entry.
 .SH FILES
 .TP
 .I /sys/class/leds/rgb:kbd_backlight/

@@ -8,6 +8,11 @@ pub fn status() {
         println!("battery: NOT FOUND (no BAT* under /sys/class/power_supply)");
         return;
     }
+    match battery::ac_online() {
+        Some(true) => println!("mains: plugged in"),
+        Some(false) => println!("mains: on battery"),
+        None => println!("mains: unknown (firmware exposes no AC node)"),
+    }
     for b in &bats {
         println!(
             "battery: {} ({} {})",
@@ -24,6 +29,25 @@ pub fn status() {
             b.power_w.unwrap_or(0.0),
             b.cycle_count.map_or("-".to_string(), |c| c.to_string())
         );
+        match (b.health_pct, b.full_milli, b.design_milli) {
+            (Some(h), Some(f), Some(d)) => println!(
+                "  health: {:.0}%  ({:.0}/{:.0} {})",
+                h,
+                f,
+                d,
+                b.capacity_unit.as_deref().unwrap_or("?")
+            ),
+            _ => println!("  health: unknown (firmware exposes no full/design capacity)"),
+        }
+        match b.time_hours() {
+            Some(h) => println!(
+                "  time {}: {:.0}h {:02.0}m",
+                if b.is_charging() { "to full" } else { "left " },
+                h.floor(),
+                (h.fract() * 60.0).round()
+            ),
+            None => println!("  time: - (Full / idle / rate unreadable)"),
+        }
         let st = b
             .charge_start_threshold
             .map_or("-".to_string(), |v| v.to_string());

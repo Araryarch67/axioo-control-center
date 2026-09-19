@@ -28,12 +28,12 @@ trap cleanup EXIT INT TERM
 
 ensure_deps() {
   if [[ ! -d node_modules ]]; then
-    log "node_modules belum ada — npm install…"
-    npm install --no-audit --no-fund
+    log "node_modules belum ada — bun install…"
+    bun install
   fi
   if [[ ! -x node_modules/.bin/vite ]]; then
-    log "vite tidak ditemukan — npm install…"
-    npm install --no-audit --no-fund
+    log "vite tidak ditemukan — bun install…"
+    bun install
   fi
 }
 
@@ -84,7 +84,7 @@ case "${1:---all}" in
   --build)
     ensure_deps
     log "build frontend…"
-    npm run build
+    bun run build
     log "build backend…"
     cargo build -p axioo-center --manifest-path ../Cargo.toml
     log "selesai: ../target/debug/axioo-center + ./dist"

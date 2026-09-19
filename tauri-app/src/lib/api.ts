@@ -21,6 +21,10 @@ export interface ProfileState {
 
 export interface Snapshot {
   product: string;
+  /** Dynamic device DB: stable id, grade string, fan-write gate. */
+  device_id: string;
+  device_grade: string;
+  fan_write_allowed: boolean;
   cpu_model: string;
   is_root: boolean;
   cpu_temp_line: string;
@@ -29,11 +33,25 @@ export interface Snapshot {
   governor: string;
   epp: string;
   gpus: GpuRow[];
+  /** dGPU RTD3: "active" | "suspended" | "absent". */
+  dgpu_state: string;
+  /** (pid, name, MiB) holders — only queried when active. */
+  dgpu_procs: Array<[number, string, number | null]>;
   fan_rpms: number[];
   bat_pct: number | null;
   bat_line: string;
   bat_start: number | null;
   bat_end: number | null;
+  /** Full/design health % (null bila firmware tak expose kapasitas). */
+  bat_health_pct: number | null;
+  bat_full_milli: number | null;
+  bat_design_milli: number | null;
+  bat_capacity_unit: string | null;
+  /** Hours until empty/full (null when Full/rate unreadable). */
+  bat_time_h: number | null;
+  bat_charging: boolean;
+  /** AC mains online (null bila firmware tak expose). */
+  ac_online: boolean | null;
   mem_pct: number | null;
   mem_line: string;
   pkg_watts: number | null;

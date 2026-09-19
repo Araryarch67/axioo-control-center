@@ -5,7 +5,7 @@
 #   ./script.sh --verbose     # tampilkan output mentah
 #   ./script.sh --no-appimage   # cuma build (tanpa bundle)
 #
-# Butuh: node/npm, Rust, webkit2gtk (lihat tauri-app/dev.sh).
+# Butuh: bun, Rust, webkit2gtk (lihat tauri-app/dev.sh).
 # sudo TIDAK perlu untuk build.
 set -euo pipefail
 
@@ -26,8 +26,7 @@ OUT="$HERE/dist"
 VERSION="${VERSION:-$(date +%Y.%m.%d)}"
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "butuh '$1' — jalankan ./setup.sh dulu (install deps)"; exit 1; }; }
-need node
-need npm
+need bun
 need cargo
 if command -v pkg-config >/dev/null 2>&1; then
     for p in webkit2gtk-4.1 gtk+-3.0; do
@@ -38,15 +37,15 @@ fi
 log "==> frontend (vite build)"
 if [ ! -d "$HERE/tauri-app/node_modules" ]; then
     if [ "$QUIET" = 1 ]; then
-        (cd "$HERE/tauri-app" && npm install --no-audit --no-fund >/dev/null 2>&1)
+        (cd "$HERE/tauri-app" && bun install --frozen-lockfile >/dev/null 2>&1)
     else
-        (cd "$HERE/tauri-app" && npm install --no-audit --no-fund)
+        (cd "$HERE/tauri-app" && bun install --frozen-lockfile)
     fi
 fi
 if [ "$QUIET" = 1 ]; then
-    (cd "$HERE/tauri-app" && npm run build >/dev/null 2>&1)
+    (cd "$HERE/tauri-app" && bun run build >/dev/null 2>&1)
 else
-    (cd "$HERE/tauri-app" && npm run build)
+    (cd "$HERE/tauri-app" && bun run build)
 fi
 
 log "==> ikon hicolor (dist/icon.png dari icons/)"
@@ -85,9 +84,9 @@ mkdir -p "$OUT"
 # fungsi identik. (Diverifikasi 2026-09-16.)
 export NO_STRIP=1
 if [ "$QUIET" = 1 ]; then
-    (cd "$HERE/tauri-app" && npx tauri build --bundles appimage >/dev/null 2>&1)
+    (cd "$HERE/tauri-app" && bunx tauri build --bundles appimage >/dev/null 2>&1)
 else
-    (cd "$HERE/tauri-app" && npx tauri build --bundles appimage)
+    (cd "$HERE/tauri-app" && bunx tauri build --bundles appimage)
 fi
 # Bundle dir = cargo target dir workspace (bukan src-tauri/target!):
 # `cargo metadata` → target_directory = $HERE/target (workspace root).

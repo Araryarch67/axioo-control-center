@@ -1,0 +1,100 @@
+# Device table: single source of truth (was hardcoded consts).
+# Add a Pongo here — no rebuild needed when loaded from
+# /etc/axioo-control-center/devices.toml (override) or
+# /usr/share/axioo-control-center/devices.toml (packaged).
+# grade: supported | sibling | unknown-clevo
+# ("locally-validated" is runtime-only, never from this file.)
+# fan_write_allowed must stay false until `validate` passes on real hardware.
+
+[[device]]
+id = "x560wnr-sibling"
+marketing = "X560WNR barebone rebrand (Sager NP9561R / AVADirect X560WNR-G class)"
+board_match = ["X560WNR1", "X560WNR-G"]
+product_match = ["NP9561R", "X560WNR1-G", "X560WNR-G"]
+grade = "sibling"
+fan_write_allowed = true
+kbd_zones = 5
+notes = "Same barebone family, untested — fan writes allowed with warning."
+
+[[device]]
+id = "x560wnr-su9"
+marketing = "Axioo Pongo Studio X 2025 (Clevo X560WNR-SU9)"
+board_match = ["X560WNR"]
+product_match = ["X560WNR-SU9", "PONGO STUDIO X", "X560WNR"]
+grade = "supported"
+fan_write_allowed = true
+kbd_zones = 5
+notes = "EC map validated; fan one-shot allowed (root, 40-100%)."
+
+[[device]]
+id = "pongo725"
+board_match = ["NP50RNA"]
+product_match = ["PONGO 725"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 1
+notes = "Kbd 1 zona via driver generik (QUIRK=none); fan terkunci sampai fan dump tervalidasi."
+
+[[device]]
+id = "pongo535"
+product_match = ["PONGO 535"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "Satu chassis dengan 725; zona kbd tunggu probe."
+
+[[device]]
+id = "pongo735"
+product_match = ["PONGO 735"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "Satu chassis dengan 725; seller sebut backlight 1 warna — tunggu probe."
+
+[[device]]
+id = "pongo750"
+product_match = ["PONGO 750"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "Satu chassis dengan 725; zona kbd tunggu probe."
+
+[[device]]
+id = "pongo760"
+product_match = ["PONGO 760"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "V2 dilaporkan EC menolak tulis manual — validasi kemungkinan gagal dengan benar."
+
+[[device]]
+id = "pongo960"
+product_match = ["PONGO 960"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "Sepasang 760 (Generation 2); zona kbd tunggu probe."
+
+[[device]]
+id = "pongo755"
+product_match = ["PONGO 755"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 1
+notes = "Review sebut single-zone; barebone belum dikenal — driver generik (QUIRK=none)."
+
+[[device]]
+id = "pongo765"
+product_match = ["PONGO 765"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "Barebone belum dikenal; zona kbd tunggu probe."
+
+[[device]]
+id = "pongo775"
+product_match = ["PONGO 775"]
+grade = "unknown-clevo"
+fan_write_allowed = false
+kbd_zones = 0
+notes = "Sekelas Studio X — kandidat sekeluarga X560WNR, butuh DMI untuk konfirmasi."

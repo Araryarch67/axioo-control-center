@@ -8,6 +8,12 @@
 > Kesimpulan: tidak ada protokol per-key yang bisa di-capture karena
 > modenya tidak ada di firmware ini. Efek Wave/Rainbow/dkk di GUI sudah
 > meng-cover animasi multi-warna di atas hardware zona.
+>
+> Nuansa 2026-09-19 (bedah installer, `docs/cc30-notes.md`): komponen
+> Windows-nya bernama `KB_Perkey` dan punya UI per-key + `InitPerkeyIo`
+> — protokol per-key ADA di codebase app (untuk model lain seperti
+> X170), tapi di firmware X560WNR mesin ini modenya tidak tampil.
+> Status DITUTUP tetap: tanpa mode aktif, tidak ada yang bisa di-capture.
 
 ## Temuan
 - Keyboard 5 zona sudah 100%: quirk `0x17 → 3-zone` + zona-4 numpad EC `0x0B` ala System76 (`packaging/clevo-drivers-axioo/studiox-numpad-ec.patch`) + rear lightbar EC `0x07`, putih otomatis habis install driver.

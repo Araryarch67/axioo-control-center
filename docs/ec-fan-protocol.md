@@ -129,3 +129,25 @@ Mode kipas milik daemon (sumber kebenaran: `DaemonState::fan_mode()`):
 
 Kurva tampil di GUI dibaca dari D-Bus `GetCurve` (jangan duplikasi tabel
 di klien): kosong bila `ec_auto`, garis datar bila manual.
+
+## H. Semantik mode vendor (Control Center 3.0, `oem.ini`)
+
+Bedah installer Windows (`docs/cc30-notes.md`): app bicara WMI
+(`Clevo_WMI_Command`), lapisan di atas register EC yang sama dengan
+peta di atas — jadi daftar mode ini adalah referensi perilaku resmi:
+
+- FanMode: `0 Auto, 1 Max, 3 Silent, 5 MAXQ, 6 Custom`.
+- SituationalMode: `0 Quiet, 1 power saving, 2 performance,
+  3 Entertainment` (default `3`).
+- Flag: `SupportFanSpeedOffset=1`, `SupportXTUFanTable=1`.
+
+Pemetaan ke mode kita (sudah sejalan, jangan diubah sepihak):
+
+| Vendor | Kita |
+|---|---|
+| Auto | `ec_auto` |
+| Max | `manual` 100% (atau profil Performance tanpa quiet) |
+| Silent | `quiet-fan` (pin 40%) |
+| Custom (+offset) | `manual` / kurva custom GUI |
+| Entertainment | profil `Entertainment` (default) |
+| performance / power saving / Quiet | `Performance` / `Balanced` (+quiet) via PPD sync |

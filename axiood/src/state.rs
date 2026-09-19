@@ -1,5 +1,9 @@
 //! Shared daemon state.
 
+use std::time::Instant;
+
+use axioo_lib::rapl::RaplDomain;
+
 use crate::profile::AxiooProfile;
 
 #[derive(Debug)]
@@ -19,6 +23,11 @@ pub struct DaemonState {
     pub fan_manual: Option<u8>,
     pub ppd_profile: String,
     pub last_duty: u8,
+    /// Live package power (watts) for GUI clients: root-only energy
+    /// counter, sampled every tick. `None` until two samples exist.
+    pub pkg_watts: Option<f64>,
+    /// Previous package energy sample backing [`DaemonState::pkg_watts`].
+    pub prev_power: Option<(RaplDomain, Instant)>,
     /// Set by D-Bus `SetProfile`/`SetQuietFan` or PPD watcher; consumed by main loop.
     pub pending_apply: bool,
 }
@@ -32,6 +41,8 @@ impl DaemonState {
             fan_manual: None,
             ppd_profile,
             last_duty: 40,
+            pkg_watts: None,
+            prev_power: None,
             pending_apply: true,
         }
     }

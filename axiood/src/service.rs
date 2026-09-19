@@ -50,6 +50,13 @@ impl AxiooControl {
         self.state.read().await.last_duty
     }
 
+    /// Live package power in watts, sampled by the main loop (root-only
+    /// energy counter — GUI clients cannot read it themselves).
+    /// -1.0 when unknown (no second sample yet / counter unreadable).
+    async fn get_power_watts(&self) -> f64 {
+        self.state.read().await.pkg_watts.unwrap_or(-1.0)
+    }
+
     /// Effective fan curve `(temp_c, duty_pct)` incl. quiet toggle.
     /// Single source of truth buat chart GUI — jangan duplikasi tabel
     /// kurva di klien, baca dari sini.

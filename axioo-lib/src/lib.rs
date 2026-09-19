@@ -9,6 +9,7 @@
 
 pub mod battery;
 pub mod cpu;
+pub mod devices;
 pub mod dmi;
 pub mod ec;
 pub mod fan;

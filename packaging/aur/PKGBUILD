@@ -8,7 +8,7 @@ url="https://github.com/Araryarch67/axioo-control-center"
 license=('AGPL-3.0-or-later')
 depends=('dbus' 'gcc-libs' 'glibc' 'gtk3' 'hicolor-icon-theme' 'libayatana-appindicator'
          'librsvg' 'polkit' 'power-profiles-daemon' 'webkit2gtk-4.1')
-makedepends=('cargo' 'git' 'gtk3' 'nodejs' 'npm' 'webkit2gtk-4.1')
+makedepends=('bun' 'cargo' 'git' 'gtk3' 'webkit2gtk-4.1')
 optdepends=('clevo-drivers-dkms-git: kernel drivers for kbd LED + EC (Studio X quirk)')
 provides=('axioo-control-center')
 conflicts=('axioo-control-center')
@@ -30,9 +30,9 @@ prepare() {
 
 build() {
   cd axioo-control-center
-  export npm_config_cache="$srcdir/npm-cache"
+  export BUN_INSTALL_CACHE="$srcdir/bun-cache"
   # Frontend first: cargo embeds tauri-app/dist when compiling the backend.
-  (cd tauri-app && npm ci --no-audit --no-fund && npm run build)
+  (cd tauri-app && bun install --frozen-lockfile && bun run build)
   cargo build --release --workspace
 }
 
@@ -59,6 +59,9 @@ package() {
   # udev — writable kbd LEDs
   install -Dm644 packaging/udev/99-axioo-kbd.rules \
     "$pkgdir/usr/lib/udev/rules.d/99-axioo-kbd.rules"
+  # device table override (CLI/daemon/GUI read this first)
+  install -Dm644 axioo-lib/devices.toml \
+    "$pkgdir/usr/share/axioo-control-center/devices.toml"
   # docs
   install -Dm644 README.md "$pkgdir/usr/share/doc/axioo-control-center/README.md"
   install -Dm644 docs/ec-fan-protocol.md \

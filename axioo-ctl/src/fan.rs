@@ -10,7 +10,35 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use axioo_lib::devices::{fan_gate, FanWrite};
 use axioo_lib::{cpu, ec, fan, fan_ctrl, hwmon};
+
+/// Refuse EC writes on unvalidated hardware. Policy lives in
+/// `axioo_lib::devices`; this only renders the verdict.
+fn guard_writes() -> bool {
+    let gate = fan_gate();
+    match gate.decision {
+        FanWrite::Locked => {
+            println!(
+                "error: fan writes locked for this model ({}).",
+                gate.display
+            );
+            println!("  grade: {}", gate.profile.grade.as_str());
+            println!("  validate the EC map first: axioo-ctl fan dump");
+            println!("  then open an issue with: axioo-ctl probe --json");
+            false
+        }
+        FanWrite::AllowedWithWarning => {
+            println!(
+                "  warning: {} — same barebone family, untested.",
+                gate.display
+            );
+            println!("  proceeding (watch RPM after write, restore with: axioo-ctl fan auto)");
+            true
+        }
+        FanWrite::Allowed => true,
+    }
+}
 
 /// `axioo-ctl fan dump`: decode fan registers + cross-check hwmon.
 pub fn dump() {
@@ -194,6 +222,9 @@ pub fn curve(temp_c: i32, duty: u8) {
 /// `axioo-ctl fan set`: one-shot manual duty on both fans (needs root).
 /// Fails cleanly with usage hint when not root (GUI uses pkexec).
 pub fn set(pct: u8) {
+    if !guard_writes() {
+        std::process::exit(1);
+    }
     if !fan_ctrl::is_root() {
         println!("error: fan set needs root.");
         println!("  run: pkexec axioo-ctl fan set {pct}   (or sudo)");
@@ -221,6 +252,9 @@ pub fn set(pct: u8) {
 
 /// `axioo-ctl fan auto`: restore EC auto control on both fans (needs root).
 pub fn auto() {
+    if !guard_writes() {
+        std::process::exit(1);
+    }
     if !fan_ctrl::is_root() {
         println!("error: fan auto needs root.");
         println!("  run: pkexec axioo-ctl fan auto   (or sudo)");

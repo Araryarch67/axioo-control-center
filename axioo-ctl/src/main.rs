@@ -1,9 +1,13 @@
 mod battery;
+mod completion;
+mod config;
 mod fan;
+mod gpu;
 mod kbd;
 mod monitor;
 mod probe;
 mod profile;
+mod validate;
 
 use clap::{Parser, Subcommand};
 
@@ -11,7 +15,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "axioo-ctl",
     version,
-    about = "Linux control utility for Axioo laptops (read-only MVP)"
+    about = "Linux control utility for Axioo laptops (Clevo-based)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -21,7 +25,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Dump hardware capabilities: DMI, sensors, RAPL, NVIDIA, LEDs, ACPI/WMI, EC.
-    Probe,
+    Probe {
+        /// Machine-readable JSON on stdout (same data, for scripts/issues).
+        #[arg(long)]
+        json: bool,
+    },
     /// Live monitor: temps, clocks, power, fans, GPU, battery.
     Monitor {
         /// Refresh interval in seconds.
@@ -31,7 +39,7 @@ enum Cmd {
         #[arg(short, long)]
         count: Option<u64>,
     },
-    /// Fan inspection (read-only): EC dump + curve preview. No EC writes.
+    /// Fan: EC dump + curve preview + one-shot manual duty / restore EC-auto (writes need root).
     Fan {
         #[command(subcommand)]
         cmd: FanCmd,
@@ -50,6 +58,37 @@ enum Cmd {
     Battery {
         #[command(subcommand)]
         cmd: BatteryCmd,
+    },
+    /// dGPU: power state (RTD3-aware) + processes holding it (read-only).
+    Gpu {
+        #[command(subcommand)]
+        cmd: GpuCmd,
+    },
+    /// Print shell completions to stdout (bash|fish|zsh|powershell|elvish).
+    Completion {
+        /// Shell name.
+        shell: String,
+    },
+    /// Backup/restore all tunables as one JSON file (profile, fan, kbd, battery).
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+    /// Guided self-validation for a new model (EC read-only + kbd walk + scrubbed report).
+    Validate {
+        /// CPU load seconds for the hot sample (0 = skip load phase).
+        #[arg(long, default_value_t = 20)]
+        load_secs: u64,
+        /// Skip the interactive keyboard zone walk.
+        #[arg(long)]
+        skip_kbd: bool,
+        /// Write JSON report to file instead of stdout.
+        #[arg(long)]
+        file: Option<String>,
+        /// Unlock this machine locally when all checks MATCH
+        /// (writes /var/lib/axiood/validated, needs root; no app update).
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -163,10 +202,38 @@ enum BatteryCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum GpuCmd {
+    /// dGPU power state + holders (never wakes a suspended GPU to ask).
+    Status,
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Export current settings as JSON (stdout or --file).
+    Export {
+        /// Write to file instead of stdout.
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Apply settings from JSON (--file or stdin).
+    Import {
+        /// Read from file instead of stdin.
+        #[arg(long)]
+        file: Option<String>,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Probe => probe::run(),
+        Cmd::Probe { json } => {
+            if json {
+                probe::run_json();
+            } else {
+                probe::run();
+            }
+        }
         Cmd::Monitor { interval, count } => monitor::run(interval, count),
         Cmd::Fan { cmd } => match cmd {
             FanCmd::Dump => fan::dump(),
@@ -193,12 +260,31 @@ fn main() {
                 preset,
                 dry_run,
             } => kbd::set(brightness, rgb, preset, dry_run),
-            KbdCmd::Effect { name, rgb, preset, rear } => kbd::effect(&name, rgb, preset, rear),
+            KbdCmd::Effect {
+                name,
+                rgb,
+                preset,
+                rear,
+            } => kbd::effect(&name, rgb, preset, rear),
         },
         Cmd::Battery { cmd } => match cmd {
             BatteryCmd::Status => battery::status(),
             BatteryCmd::Get => battery::get(),
             BatteryCmd::Set { start, end } => battery::set(start, end),
         },
+        Cmd::Gpu { cmd } => match cmd {
+            GpuCmd::Status => gpu::status(),
+        },
+        Cmd::Completion { shell } => completion::run(&shell),
+        Cmd::Config { cmd } => match cmd {
+            ConfigCmd::Export { file } => config::export(file),
+            ConfigCmd::Import { file } => config::import(file),
+        },
+        Cmd::Validate {
+            load_secs,
+            skip_kbd,
+            file,
+            apply,
+        } => validate::run(load_secs, skip_kbd, file, apply),
     }
 }

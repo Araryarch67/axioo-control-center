@@ -1,11 +1,12 @@
 import * as React from "react";
 import {
   Activity, Battery, Cpu, Fan, Gauge as GaugeIcon, Keyboard, LayoutGrid,
-  Minus, Monitor, Power, Settings as SettingsIcon, Square, X, Zap,
+  Minus, Monitor, Power, Settings as SettingsIcon, Square,
+  TriangleAlert, X, Zap,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, EFFECTS, REAR_EFFECTS, THEMES, isTauri, type Snapshot, type ThemeName } from "@/lib/api";
-import { useStore, applyTheme, type Tab } from "@/lib/store";
+import { useStore, applyTheme, histCount, downloadCsv, type Tab } from "@/lib/store";
 import { tickEffect } from "@/lib/effects";
 import { refreshMatugen } from "@/lib/matugen";
 import { cn, curveDuty, fmt1, hexToRgb } from "@/lib/utils";
@@ -47,6 +48,7 @@ function kbdShort(nodes: number): string {
 
 function Titlebar({ tab }: { tab: Tab }) {
   const win = React.useMemo(() => (isTauri() ? getCurrentWindow() : null), []);
+  const showWinBtns = useStore((s) => s.showWinBtns);
   const btn = "flex h-8 w-11 items-center justify-center text-faint transition-colors hover:bg-card2 hover:text-ink";
   return (
     <div className="flex h-11 shrink-0 items-stretch border-b-2 border-black bg-bg">
@@ -55,9 +57,13 @@ function Titlebar({ tab }: { tab: Tab }) {
         <span className="text-[12.5px] font-extrabold uppercase italic tracking-[0.14em]">{TITLES[tab].title}</span>
       </div>
       <div className="flex flex-1 items-stretch justify-end">
-        <button className={btn} onClick={() => win?.minimize()} aria-label="minimize"><Minus size={14} /></button>
-        <button className={btn} onClick={() => win?.toggleMaximize()} aria-label="maximize"><Square size={12} /></button>
-        <button className={cn(btn, "hover:bg-bad hover:text-white")} onClick={() => win?.close()} aria-label="close"><X size={15} /></button>
+        {showWinBtns && (
+          <>
+            <button className={btn} onClick={() => win?.minimize()} aria-label="minimize"><Minus size={14} /></button>
+            <button className={btn} onClick={() => win?.toggleMaximize()} aria-label="maximize"><Square size={12} /></button>
+            <button className={cn(btn, "hover:bg-bad hover:text-white")} onClick={() => win?.close()} aria-label="close"><X size={15} /></button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -102,6 +108,23 @@ export default function App() {
     startPolling();
     return () => stopPolling();
   }, [startPolling, stopPolling]);
+
+  // Notifikasi dari tray backend (mis. ganti profil via tray gagal karena
+  // daemon mati) → toast yang sama seperti aksi dari jendela.
+  React.useEffect(() => {
+    if (!isTauri()) return;
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ text: string; error: boolean }>("tray-notice", (e) => {
+          if (alive) useStore.getState().notice(e.payload.text, e.payload.error);
+        });
+      } catch { /* tanpa runtime Tauri = abaikan */ }
+    })();
+    return () => { alive = false; unlisten?.(); };
+  }, []);
 
   React.useEffect(() => {
     applyTheme(theme);
@@ -192,6 +215,61 @@ export default function App() {
 
 /* ---------------- dashboard ---------------- */
 
+/** dGPU sub-line: RTD3 sleep shown honestly, holders counted when awake. */
+function gpuSub(snap: Snapshot | null): string {
+  if (!snap) return "-";
+  if (snap.dgpu_state === "absent") return "power.limit N/A";
+  if (snap.dgpu_state === "suspended") return "RTD3 sleep · 0W";
+  const g = snap.gpus[0];
+  const base = g ? `${fmt1(g.temp_c, "°C")} · ${fmt1(g.power_w, "W")}` : "";
+  const n = snap.dgpu_procs.length;
+  if (n === 0) return [base, "idle"].filter(Boolean).join(" · ");
+  const names = snap.dgpu_procs.slice(0, 2).map(([, name]) => name.split("/").pop() ?? name);
+  const more = n > 2 ? ` +${n - 2}` : "";
+  return [base, `holders: ${names.join(", ")}${more}`].filter(Boolean).join(" · ");
+}
+
+/** "2h 15m" dari jam fraksional. */
+function fmtDur(h: number): string {
+  const m = Math.round(h * 60);
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** Passive health alerts, derived from the live snapshot (no state, no
+ *  spam — the banner simply exists while the condition holds).
+ *  Read-only: never writes anything, never touches the EC. */
+function Alerts({ snap }: { snap: Snapshot | null }) {
+  const items: string[] = [];
+  const cpuTemp = snap?.max_temp_c ?? snap?.ec_cpu_temp ?? null;
+  if (cpuTemp != null && cpuTemp >= 95) {
+    items.push(`CPU ${cpuTemp}°C — sustained heat: check fan curve, vents, dust.`);
+  }
+  const duty = snap?.profile.daemon ? snap.profile.fan_duty : null;
+  const rpms = [
+    snap?.ec_fan1_rpm ?? snap?.fan_rpms[0] ?? null,
+    snap?.ec_fan2_rpm ?? snap?.fan_rpms[1] ?? null,
+  ].filter((v): v is number => v != null);
+  if (duty != null && duty >= 70 && rpms.length > 0 && rpms.every((r) => r === 0)) {
+    items.push(`Fans at 0 rpm with ${duty}% duty — possible fan failure, check EC/fan headers.`);
+  }
+  const health = snap?.bat_health_pct ?? null;
+  if (health != null && health < 70) {
+    items.push(`Battery health ${Math.round(health)}% — degraded, consider a replacement.`);
+  }
+  if (items.length === 0) return null;
+  return (
+    <Card className="col-span-12 border-accent/60">
+      <div className="space-y-1.5">
+        {items.map((t) => (
+          <div key={t} className="flex items-center gap-2 text-[13px] font-semibold text-accent">
+            <TriangleAlert size={15} className="shrink-0" />{t}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function Dashboard({ snap, shownDuty, ecAuto, liveTemp, busy, run }: {
   snap: Snapshot | null; shownDuty: number | null; ecAuto: boolean; liveTemp: number | null;
   busy: boolean; run: (fn: () => Promise<string>) => void;
@@ -202,6 +280,7 @@ function Dashboard({ snap, shownDuty, ecAuto, liveTemp, busy, run }: {
   const shortCpu = (snap?.cpu_model ?? "-").replace(/\(R\)|\(TM\)/g, "").replace(/\s+/g, " ").trim();
   return (
     <div className="grid grid-cols-12 gap-4">
+      <Alerts snap={snap} />
       <Card className="col-span-12 sm:col-span-6 xl:col-span-3">
         <div className="flex items-baseline justify-between">
           <span className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-faint">CPU load</span>
@@ -253,7 +332,7 @@ function Dashboard({ snap, shownDuty, ecAuto, liveTemp, busy, run }: {
         <div className="grid gap-x-8 gap-y-4 sm:grid-cols-2">
           <SpecRow label="Product" value={snap?.product ?? "-"} />
           <SpecRow label="CPU" value={shortCpu} sub={snap?.cpu_freq_line ?? ""} />
-          <SpecRow label="GPU" value={snap?.gpus[0]?.name ?? "N/A"} sub={snap?.gpus[0] ? `${fmt1(snap.gpus[0].temp_c, "°C")} · ${fmt1(snap.gpus[0].power_w, "W")}` : "power.limit N/A"} />
+          <SpecRow label="GPU" value={snap?.gpus[0]?.name ?? "N/A"} sub={gpuSub(snap)} />
           <SpecRow label="Keyboard" value={snap ? kbdLabel(snap.kbd_nodes) : "-"} sub={snap?.kbd_writable ? "writable" : "read-only"} />
         </div>
       </Card>
@@ -272,6 +351,17 @@ function Dashboard({ snap, shownDuty, ecAuto, liveTemp, busy, run }: {
           ))}
         </div>
         <p className="mt-2.5 text-[12px] text-faint">Full controls in the Performance tab.</p>
+      </Card>
+      <Card className="col-span-12">
+        <CardTitle>Session log</CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <p className="num text-[12px] text-faint">
+            {histCount()} samples this session (temp · duty · rpm · watts · batt) — memory only, nothing written.
+          </p>
+          <CButton disabled={histCount() === 0} onClick={() => downloadCsv()}>
+            Export CSV
+          </CButton>
+        </div>
       </Card>
     </div>
   );
@@ -792,6 +882,24 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
         <div className="mt-3"><Bar pct={snap?.bat_pct} /></div>
         <div className="num mt-2 truncate text-[12px] text-dim" title={snap?.bat_line ?? ""}>{snap?.bat_line ?? "-"}</div>
         <div className="num mt-1 text-[12px] text-faint">FlexiCharger {snap?.bat_start ?? "?"}% → {snap?.bat_end ?? "?"}%</div>
+        <div className="num mt-1 text-[12px] text-faint">
+          {snap?.ac_online == null ? "Mains: ?" : snap.ac_online ? "Mains: plugged in" : "Mains: on battery"}
+          {snap?.bat_time_h != null && (
+            <span> · {fmtDur(snap.bat_time_h)} {snap.bat_charging ? "to full" : "left"}</span>
+          )}
+        </div>
+        <div className="num mt-1 text-[12px]">
+          {snap?.bat_health_pct != null ? (
+            <span className={snap.bat_health_pct < 80 ? "text-accent" : "text-faint"}>
+              Health {Math.round(snap.bat_health_pct)}%
+              {snap.bat_full_milli != null && snap.bat_design_milli != null && (
+                <span className="text-faint"> · {Math.round(snap.bat_full_milli)}/{Math.round(snap.bat_design_milli)} {snap.bat_capacity_unit ?? ""}</span>
+              )}
+            </span>
+          ) : (
+            <span className="text-faint">Health n/a (firmware exposes no capacity)</span>
+          )}
+        </div>
       </Card>
       <Card className="col-span-12 sm:col-span-6">
         <CardTitle>Charge limits</CardTitle>
@@ -860,6 +968,8 @@ function PowerPanel({ snap, batStart, setBatStart, batEnd, setBatEnd, busy, run 
 function SettingsPanel({ snap, theme, setTheme }: {
   snap: Snapshot | null; theme: ThemeName; setTheme: (t: ThemeName) => void;
 }) {
+  const showWinBtns = useStore((s) => s.showWinBtns);
+  const setShowWinBtns = useStore((s) => s.setShowWinBtns);
   const [autoStart, setAutoStart] = React.useState<boolean | null>(null);
   React.useEffect(() => {
     if (!isTauri()) return;
@@ -912,6 +1022,16 @@ function SettingsPanel({ snap, theme, setTheme }: {
               </div>
             </button>
           ))}
+        </div>
+      </Card>
+      <Card className="col-span-12 xl:col-span-6">
+        <CardTitle>Window</CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[14px] font-bold">Titlebar buttons (-/□/X)</div>
+            <div className="text-[12.5px] text-faint">Hide the minimize/maximize/close buttons · window still closes to tray via Alt+F4 or tray menu</div>
+          </div>
+          <Switch on={showWinBtns} onClick={() => setShowWinBtns(!showWinBtns)} />
         </div>
       </Card>
       <Card className="col-span-12 xl:col-span-6">
