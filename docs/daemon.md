@@ -1,9 +1,10 @@
-# axiood — daemon privileged (EC fan loop + RAPL + PPD sync)
+# axiood — si penjaga kipas (EC fan loop + RAPL + PPD sync)
 
-`axiood` adalah service systemd root — **satu-satunya penulis EC untuk
-loop kontinu**. CLI (`axioo-ctl profile/...`) dan GUI Tauri adalah klien
-tipis via D-Bus `com.axioo.Control` (`/com/axioo/Control`).
-EPP/governor **sengaja tidak disentuh** (milik PPD).
+`axiood` itu service systemd yang jalan sebagai root — **satu-satunya
+yang boleh nulis ke EC secara terus-menerus**. CLI (`axioo-ctl
+profile/...`) dan GUI Tauri cuma klien tipis yang nitip pesan via D-Bus
+`com.axioo.Control` (`/com/axioo/Control`).
+EPP/governor **sengaja tidak disentuh** (itu urusan PPD).
 
 ```sh
 sudo systemctl enable --now axiood
@@ -63,6 +64,7 @@ masing-masing (interval 0.5–30 dtk via `--interval`).
 | `GetProfile` / `SetProfile` | `profile: String` | get/set profil (`Balanced`/`Entertainment`/`Performance`, legacy `Quiet`); return label |
 | `GetPpdProfile` | — | profil PPD terakhir dilihat daemon |
 | `GetFanDuty` | — | duty terakhir ditulis loop (%) |
+| `GetPowerWatts` | — | daya package live (watt, dari counter root-only); `-1.0` bila belum tahu |
 | `GetCurve` | — | kurva efektif `(temp, duty)` buat chart GUI; kosong bila `ec_auto`, datar bila manual |
 | `GetQuietFan` / `SetQuietFan` | `quiet: bool` | toggle quiet-fan per mode |
 | `GetFanMode` | — | `"curve"` / `"manual"` / `"ec_auto"` |
@@ -85,6 +87,9 @@ speed di-clamp 0.1–4.0.
   Di-restore daemon saat start (sebelum SDDM) + retry bila driver telat;
   hanya warna dasar statis (animasi efek jalan lagi setelah GUI login).
   Rantai restore lengkap: `docs/kbd-backlight.md`.
+- `/var/lib/axiood/validated` — bukti validasi lokal (`validate --apply`):
+  DMI persis + verdict + fakta terukur (zona, RAPL stock, sampel EC).
+  Tanpa UUID, root-only, tidak pernah dikirim ke mana pun.
 
 ## CLI via daemon
 

@@ -1,6 +1,8 @@
 //! Desktop integration: matugen theme + login autostart.
 
-use tauri::Emitter;
+use std::sync::Mutex;
+
+use tauri::{Emitter, Manager, State};
 
 /// Revisi palet matugen = mtime `~/.cache/ryoku/colors.json` (detik).
 /// Satu `stat` syscall per snapshot — jauh lebih murah dari baca+parse JSON.
@@ -222,6 +224,34 @@ pub(crate) fn autostart_get() -> bool {
 #[tauri::command]
 pub(crate) fn autostart_set(enabled: bool) -> Result<bool, String> {
     autostart_write(enabled)
+}
+
+/// Close behavior requested from Settings ("tray" | "quit").
+/// Stored per backend run (default tray); the frontend pushes its
+/// persisted choice at boot and on every change.
+pub(crate) struct CloseBehavior(pub(crate) Mutex<String>);
+
+#[tauri::command]
+pub(crate) async fn close_behavior_set(
+    behavior: String,
+    holder: State<'_, CloseBehavior>,
+) -> Result<String, String> {
+    let b = behavior.to_lowercase();
+    if b != "tray" && b != "quit" {
+        return Err("want tray|quit".to_string());
+    }
+    *holder.0.lock().map_err(|_| "lock poisoned".to_string())? = b.clone();
+    Ok(b)
+}
+
+/// `true` = close button really quits. Lock/read failures fail safe to tray.
+pub(crate) fn close_quits(win: &tauri::WebviewWindow) -> bool {
+    win.app_handle()
+        .state::<CloseBehavior>()
+        .inner()
+        .lock()
+        .map(|s| s.0.as_str() == "quit")
+        .unwrap_or(false)
 }
 #[cfg(test)]
 mod tests {

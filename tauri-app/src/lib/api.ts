@@ -106,6 +106,8 @@ export const api = {
   /** Autostart login (entry wrapper, bukan plugin — lihat main.rs). */
   autostartGet: () => invoke<boolean>("autostart_get"),
   autostartSet: (enabled: boolean) => invoke<boolean>("autostart_set", { enabled }),
+  /** Perilaku tombol close (Settings). Backend simpan per sesi; default tray. */
+  closeBehaviorSet: (behavior: string) => invoke<string>("close_behavior_set", { behavior }),
 };
 
 export const THEMES = [

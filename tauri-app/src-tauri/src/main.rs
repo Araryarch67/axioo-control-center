@@ -68,17 +68,38 @@ pub(crate) fn sync_tray_checks(items: &TrayProfiles, label: &str) {
         let _ = item.set_checked(on);
     }
 }
+/// Pastikan jendela utama ada lalu tampilkan + fokus. Jendela
+/// dihancurkan (bukan disembunyi) saat ke tray agar webview ~100MB ikut
+/// bebas — dibangun ulang di sini dengan geometri tauri.conf.json.
+/// State penting aman: sampler di backend Rust, tema/kbd di persist store.
+fn ensure_main_shown(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return;
+    }
+    match tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("Axioo Control Center")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(960.0, 600.0)
+        .decorations(false)
+        .build()
+    {
+        Ok(w) => {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        Err(e) => eprintln!("axioo-center: rebuild window failed ({e})"),
+    }
+}
 fn main() {
     tauri::Builder::default()
         // Single-instance: peluncuran kedua mati sendiri dan memunculkan
         // window instance pertama (bukan dua tray icon + dua backend yang
         // rebutan tulis sysfs LED).
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            ensure_main_shown(app);
         }))
         .manage(Mutex::new(SamplerState {
             prev_stat: cpu::read_times(),
@@ -92,6 +113,9 @@ fn main() {
             speed: 1.0,
             stops: Vec::new(),
         }))
+        // Perilaku close dari Settings (default tray); frontend dorong
+        // pilihan tersimpan saat boot + tiap ganti.
+        .manage(system::CloseBehavior(Mutex::new(String::from("tray"))))
         .setup(|app| {
             // Watcher palet wallpaper (event-driven, thread parkir):
             // frontend hidden tick via event, bukan poll cepat.
@@ -160,12 +184,9 @@ fn main() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
+                    // Jendela dihancurkan saat ke tray (hemat ~100MB webview);
+                    // "Show" membangun ulang bila belum ada.
+                    "show" => ensure_main_shown(app),
                     "profile-balanced" | "profile-entertainment" | "profile-performance" => {
                         let want = match event.id.as_ref() {
                             "profile-balanced" => "Balanced",
@@ -211,38 +232,37 @@ fn main() {
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
-                    // Klik kiri = tampil/sembunyi; kanan = menu (otomatis).
+                    // Klik kiri = tampilkan (bangun ulang bila dihancurkan).
+                    // Tutup jendela = hancurkan ke tray; kanan = menu.
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            if w.is_visible().unwrap_or(true) {
-                                let _ = w.hide();
-                            } else {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
-                        }
+                        ensure_main_shown(tray.app_handle());
                     }
                 })
                 .build(app)?;
-            // Autostart login (--minimized) → langsung sembunyi ke tray.
+            // Autostart login (--minimized) → tanpa jendela sama sekali
+            // (nol biaya webview; dibangun saat pertama dibuka).
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.hide();
+                    let _ = w.destroy();
                 }
             }
             Ok(())
         })
-        // Tombol close (termasuk Alt+F4) = sembunyi ke tray, bukan keluar.
-        // Keluar beneran hanya via menu tray → Keluar.
+        // Tombol close (termasuk Alt+F4): ikut Settings — quit = keluar
+        // beneran, tray = hancurkan jendela (webview bebas, app di tray).
+        // Keluar selalu bisa via menu tray → Keluar.
         .on_window_event(|win, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let _ = win.hide();
+                if system::close_quits(win) {
+                    win.app_handle().exit(0);
+                } else {
+                    let _ = win.destroy();
+                }
                 api.prevent_close();
             }
         })
@@ -262,6 +282,7 @@ fn main() {
             system::get_matugen,
             system::autostart_get,
             system::autostart_set,
+            system::close_behavior_set,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run axioo-center");

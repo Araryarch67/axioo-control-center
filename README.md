@@ -122,6 +122,8 @@ Control Center 3.0 (per-model profiles, fan curves, keyboard zones).
 
 ## Details
 
+Indeks lengkap: [`docs/README.md`](docs/README.md).
+
 * How it works + safety contract: [`AGENTS.md`](AGENTS.md)
 * EC fan protocol + write contract: [`docs/ec-fan-protocol.md`](docs/ec-fan-protocol.md)
 * Daemon, profiles, PPD sync, D-Bus API: [`docs/daemon.md`](docs/daemon.md)

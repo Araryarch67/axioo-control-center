@@ -157,6 +157,9 @@ rm_root "polkit policy" /usr/share/polkit-1/actions/com.axioo.Control.policy \
     /etc/polkit-1/actions/com.axioo.Control.policy
 rm_root "udev rules" /etc/udev/rules.d/99-axioo-kbd.rules \
     /usr/lib/udev/rules.d/99-axioo-kbd.rules
+rm_root "device table" /usr/share/axioo-control-center/devices.toml
+rm_root "daemon state (kbd save + local validation)" /var/lib/axiood/kbd.json \
+    /var/lib/axiood/validated
 if have systemctl; then
     $SUDO systemctl daemon-reload 2>/dev/null || true
     $SUDO systemctl reset-failed axiood 2>/dev/null || true
@@ -321,7 +324,9 @@ check "daemon files" /usr/bin/axiood /usr/local/bin/axiood /usr/bin/axioo-ctl /u
     /etc/systemd/system/axiood.service /usr/lib/systemd/system/axiood.service \
     /etc/dbus-1/system.d/com.axioo.Control.conf \
     /usr/share/polkit-1/actions/com.axioo.Control.policy \
-    /etc/udev/rules.d/99-axioo-kbd.rules /usr/lib/udev/rules.d/99-axioo-kbd.rules
+    /etc/udev/rules.d/99-axioo-kbd.rules /usr/lib/udev/rules.d/99-axioo-kbd.rules \
+    /usr/share/axioo-control-center/devices.toml \
+    /var/lib/axiood/kbd.json /var/lib/axiood/validated
 check "app files" "$HOME/.local/share/$APPID" "$HOME/.local/bin/axioo-ctl" \
     "$HOME/.local/bin/axioo-center-autostart" /usr/share/man/man1/axioo-ctl.1 \
     "$HOME/.local/share/applications/$APPID.desktop" \

@@ -1,7 +1,8 @@
 # Dukungan Perangkat
 
-Aplikasi ini mendeteksi laptopmu secara otomatis dan menyesuaikan fitur
-yang dinyalakan. Cari modelmu di tabel bawah.
+Punya Pongo? Aplikasi ini kenalan dulu sama laptopmu, terus nyalain
+fitur yang cocok — yang belum cocok dikunci dulu biar aman. Cari
+modelmu di tabel bawah.
 
 ## Ringkasan
 

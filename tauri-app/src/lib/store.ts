@@ -78,6 +78,9 @@ interface AppStore {
   /** Tampilkan tombol -/kotak/X di titlebar (persist, default tampil). */
   showWinBtns: boolean;
   setShowWinBtns: (b: boolean) => void;
+  /** Perilaku tombol close: "tray" (hancurkan ke tray) atau "quit" (keluar). */
+  closeBehavior: "tray" | "quit";
+  setCloseBehavior: (b: "tray" | "quit") => void;
 }
 
 let pollTimer: number | undefined;
@@ -380,6 +383,11 @@ export const useStore = create<AppStore>()(
       setFanManualDuty: (fanManualDuty) => set({ fanManualDuty }),
       showWinBtns: true,
       setShowWinBtns: (showWinBtns) => set({ showWinBtns }),
+      closeBehavior: "tray",
+      setCloseBehavior: (closeBehavior) => {
+        set({ closeBehavior });
+        void api.closeBehaviorSet(closeBehavior).catch(() => {});
+      },
       hydrateKbd: (snap) => {
         const st = get();
         if (st.kbdHydrated || snap.kbd_nodes === 0) return;
@@ -427,6 +435,7 @@ export const useStore = create<AppStore>()(
         fanCurve: s.fanCurve,
         fanManualDuty: s.fanManualDuty,
         showWinBtns: s.showWinBtns ?? true,
+        closeBehavior: s.closeBehavior ?? "tray",
       }),
     },
   ),

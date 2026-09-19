@@ -106,6 +106,8 @@ export default function App() {
   React.useEffect(() => {
     applyTheme(useStore.getState().theme);
     startPolling();
+    // Sinkronkan pilihan close ke backend (default tray bila gagal).
+    void api.closeBehaviorSet(useStore.getState().closeBehavior ?? "tray").catch(() => {});
     return () => stopPolling();
   }, [startPolling, stopPolling]);
 
@@ -667,7 +669,7 @@ function KeyboardPanel({ snap, zone, setZone, bright, setBright, hex, setHex, dr
       setStatus("writing…");
       void (async () => {
         const ok = await useStore.getState().applyKbdFollow(bright, snap?.matugen_rev ?? 0);
-        setStatus(ok ? `following wallpaper · ${new Date().toLocaleTimeString("en-GB")}` : "matugen unreadable — check Ryoku");
+        setStatus(ok ? `following wallpaper · ${new Date().toLocaleTimeString("en-GB")}` : "matugen unreadable — see docs/matugen.md");
       })();
     } else {
       setFollow(false);
@@ -970,6 +972,8 @@ function SettingsPanel({ snap, theme, setTheme }: {
 }) {
   const showWinBtns = useStore((s) => s.showWinBtns);
   const setShowWinBtns = useStore((s) => s.setShowWinBtns);
+  const closeBehavior = useStore((s) => s.closeBehavior) ?? "tray";
+  const setCloseBehavior = useStore((s) => s.setCloseBehavior);
   const [autoStart, setAutoStart] = React.useState<boolean | null>(null);
   React.useEffect(() => {
     if (!isTauri()) return;
@@ -1003,7 +1007,7 @@ function SettingsPanel({ snap, theme, setTheme }: {
           </div>
           <Switch on={autoStart ?? false} disabled={!isTauri() || autoStart == null} onClick={flipAutoStart} />
         </div>
-        <p className="mt-2 text-[12px] text-faint">Closing the window (×/Alt+F4) = hide to tray · quit via tray menu → Quit.</p>
+        <p className="mt-2 text-[12px] text-faint">Closing the window (×/Alt+F4) = {closeBehavior === "quit" ? "quit the app" : "destroy to tray"} · {closeBehavior === "quit" ? "tray stays only via autostart" : "quit via tray menu → Quit"}.</p>
       </Card>
       <Card className="col-span-12 xl:col-span-6">
         <CardTitle>Theme</CardTitle>
@@ -1014,7 +1018,9 @@ function SettingsPanel({ snap, theme, setTheme }: {
                 theme === t ? "border-black bg-accent/15" : "border-hair hover:border-dim")}
               style={theme === t ? { boxShadow: "4px 4px 0 #000" } : undefined}>
               <div className="text-[13.5px] font-black uppercase tracking-wide">{t}</div>
-              {t === "matugen" && <div className="mt-0.5 text-[10.5px] text-faint">following wallpaper · live</div>}
+              {t === "matugen" && (snap?.matugen_rev
+                ? <div className="mt-0.5 text-[10.5px] text-faint">following wallpaper · live</div>
+                : <div className="mt-0.5 text-[10.5px] text-faint">matugen doesn't work on your setup — use matugen (see docs/matugen.md)</div>)}
               <div className="mt-1.5 flex gap-1">
                 <span className="h-3.5 w-8 rounded-full bg-cream" />
                 <span className="h-3.5 w-8 rounded-full bg-accent" />
@@ -1029,9 +1035,25 @@ function SettingsPanel({ snap, theme, setTheme }: {
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-[14px] font-bold">Titlebar buttons (-/□/X)</div>
-            <div className="text-[12.5px] text-faint">Hide the minimize/maximize/close buttons · window still closes to tray via Alt+F4 or tray menu</div>
+            <div className="text-[12.5px] text-faint">Hide the minimize/maximize/close buttons · window still closes via Alt+F4 or tray menu</div>
           </div>
           <Switch on={showWinBtns} onClick={() => setShowWinBtns(!showWinBtns)} />
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[14px] font-bold">Close button (×)</div>
+            <div className="text-[12.5px] text-faint">Tray = window destroyed, app stays · Quit = app exits for real</div>
+          </div>
+          <div className="flex gap-2">
+            {(["tray", "quit"] as const).map((b) => (
+              <button key={b} onClick={() => setCloseBehavior(b)}
+                className={cn("rounded-lg border-2 px-3 py-1.5 text-[12.5px] font-black uppercase tracking-wide transition-all",
+                  closeBehavior === b ? "border-black bg-accent/15" : "border-hair hover:border-dim")}
+                style={closeBehavior === b ? { boxShadow: "3px 3px 0 #000" } : undefined}>
+                {b === "tray" ? "Tray" : "Quit"}
+              </button>
+            ))}
+          </div>
         </div>
       </Card>
       <Card className="col-span-12 xl:col-span-6">
